@@ -23,6 +23,7 @@ just pointed at this script and a port of your choosing.
 No third-party dependencies. Standard library only.
 """
 
+import base64
 import hmac
 import json
 import os
@@ -49,7 +50,10 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "stockroom_data.json"
 INDEX_FILE = BASE_DIR / "index.html"
 TOKEN_FILE = BASE_DIR / "stockroom_token.txt"
+PHOTOS_DIR = BASE_DIR / "photos"
 TOMBSTONE_MAX_AGE_DAYS = 30
+
+PHOTOS_DIR.mkdir(exist_ok=True)
 
 _lock = threading.Lock()
 
@@ -120,7 +124,7 @@ def prune_old_tombstones(items, max_age_days=TOMBSTONE_MAX_AGE_DAYS):
     can win future sync merges — but keeping them forever would grow the
     file without bound. Once a tombstone is older than max_age_days, any
     device that still disagreed has had ample time to sync, so it's safe
-    to drop for good.
+    to drop for good. Its photo file (if any) is cleaned up alongside it.
     """
     cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
     kept = []
@@ -136,8 +140,26 @@ def prune_old_tombstones(items, max_age_days=TOMBSTONE_MAX_AGE_DAYS):
             continue
         if ts >= cutoff:
             kept.append(item)
-        # else: old enough to prune — dropped
+            continue
+        # Old enough to prune — drop the item and any photo file it owned.
+        photo_path = photo_path_for_id(item.get("id", ""))
+        if photo_path is not None and photo_path.exists():
+            try:
+                photo_path.unlink()
+            except OSError:
+                pass
     return kept
+
+
+def photo_path_for_id(item_id):
+    """
+    Deterministic filename (<id>.jpg) so the client never needs the server
+    to tell it what a photo got saved as. Rejects anything that isn't a
+    plain id (no path separators) so a crafted id can't escape PHOTOS_DIR.
+    """
+    if not item_id or "/" in item_id or "\\" in item_id or item_id in (".", ".."):
+        return None
+    return PHOTOS_DIR / f"{item_id}.jpg"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -192,6 +214,24 @@ class Handler(BaseHTTPRequestHandler):
             with _lock:
                 data = load_data()
             self._send_json(200, data)
+        elif path.startswith("/photos/"):
+            if not self._token_ok(token):
+                self._send_json(401, {"error": "Invalid or missing token"})
+                return
+            filename = path[len("/photos/"):]
+            item_id = filename[:-4] if filename.endswith(".jpg") else filename
+            photo_path = photo_path_for_id(item_id)
+            if photo_path is None or not photo_path.exists():
+                self.send_error(404, "Not found")
+                return
+            body = photo_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
         elif path in ("/", "/index.html"):
             # The app shell itself stays open — only the data API is
             # gated. That matches how you'll actually use this: load the
@@ -202,6 +242,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path, token = self._parsed_path_and_token()
+
+        if path.startswith("/api/photos/"):
+            if not self._token_ok(token):
+                self._send_json(401, {"error": "Invalid or missing token"})
+                return
+            item_id = path[len("/api/photos/"):]
+            photo_path = photo_path_for_id(item_id)
+            if photo_path is None:
+                self._send_json(400, {"error": "invalid id"})
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "invalid JSON"})
+                return
+            data_url = payload.get("data", "")
+            # Expect a data URL like "data:image/jpeg;base64,....";
+            # tolerate raw base64 too in case the client ever sends that.
+            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+            try:
+                photo_bytes = base64.b64decode(b64)
+            except (ValueError, TypeError):
+                self._send_json(400, {"error": "invalid photo data"})
+                return
+            tmp_path = photo_path.with_suffix(".tmp")
+            with _lock:
+                tmp_path.write_bytes(photo_bytes)
+                tmp_path.replace(photo_path)
+            self._send_json(200, {"filename": photo_path.name})
+            return
+
         if path != "/api/data":
             self.send_error(404, "Not found")
             return

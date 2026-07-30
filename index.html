@@ -120,6 +120,40 @@
   .sync-status.ok{ color:#7FAE86; }
   .sync-status.err{ color:var(--stamp); }
 
+  /* ---------- Tag chip filter ---------- */
+  .tag-chips{ display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+  .tag-chip-btn{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    color:var(--muted);
+    background:transparent;
+    border:1px solid var(--line);
+    padding:4px 10px;
+    border-radius:20px;
+    cursor:pointer;
+  }
+  .tag-chip-btn:hover{ border-color:#4a515f; }
+  .tag-chip-btn.active{
+    color:var(--ink);
+    background:var(--kraft);
+    border-color:var(--kraft-dark);
+  }
+
+  /* ---------- Highlight banner (scanned-label deep link) ---------- */
+  .highlight-banner{
+    display:none;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 28px;
+    background:rgba(92,130,166,0.12);
+    border-bottom:1px solid var(--steel-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--paper);
+  }
+  .highlight-banner.show{ display:flex; }
+
   /* ---------- Grid ---------- */
   main{ padding:24px 28px 60px; }
   .grid{
@@ -312,6 +346,36 @@
   }
   .backdrop.open{ display:block; }
 
+  /* ---------- Print label ---------- */
+  #printLabelArea{ display:none; }
+  .print-label{
+    width:3.5in;
+    padding:0.25in;
+    font-family:'IBM Plex Sans', sans-serif;
+    color:#000;
+  }
+  .print-label .stamp{
+    font-family:'Oswald', sans-serif;
+    font-weight:700;
+    font-size:28px;
+    text-transform:uppercase;
+    border:2px solid #000;
+    display:inline-block;
+    padding:2px 10px;
+    margin-bottom:8px;
+  }
+  .print-label .contents{ font-size:13px; margin-bottom:6px; line-height:1.4; }
+  .print-label .location{ font-family:'IBM Plex Mono', monospace; font-size:11px; margin-bottom:6px; }
+  .print-label .tags{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:#444; margin-bottom:10px; }
+  .print-label .qr-row{ display:flex; align-items:center; gap:10px; }
+  .print-label .qr-row img{ width:1.1in; height:1.1in; }
+  .print-label .qr-caption{ font-family:'IBM Plex Mono', monospace; font-size:9px; color:#444; }
+
+  @media print{
+    body.printing > *:not(#printLabelArea){ display:none !important; }
+    body.printing #printLabelArea{ display:block !important; }
+  }
+
   @media (prefers-reduced-motion: reduce){
     *{ transition:none !important; }
   }
@@ -335,9 +399,14 @@
   </div>
 </header>
 
+<div class="highlight-banner" id="highlightBanner">
+  <span>Showing 1 box from a scanned label</span>
+  <button id="clearHighlightBtn">Show all boxes</button>
+</div>
+
 <div class="toolbar">
   <input type="text" id="searchInput" placeholder="Search contents, box #, location, tags…">
-  <select id="tagFilter"><option value="">All tags</option></select>
+  <div class="tag-chips" id="tagChips"></div>
   <span class="count-pill" id="countPill">0 boxes</span>
 </div>
 
@@ -363,7 +432,8 @@
     </div>
     <div class="field">
       <label for="fLocation">Location</label>
-      <input type="text" id="fLocation" placeholder="e.g. Garage / Shelf B">
+      <input type="text" id="fLocation" placeholder="e.g. Garage / Shelf B" list="locationList">
+      <datalist id="locationList"></datalist>
     </div>
     <div class="field">
       <label for="fTags">Tags</label>
@@ -377,7 +447,10 @@
       </div>
     </div>
     <div class="modal-footer">
-      <button class="btn-stamp" id="deleteBtn" style="display:none;">Delete</button>
+      <div>
+        <button class="btn-stamp" id="deleteBtn" style="display:none;">Delete</button>
+        <button id="printLabelBtn" style="display:none;">Print label</button>
+      </div>
       <div class="right">
         <button id="cancelBtn">Cancel</button>
         <button class="btn-primary" id="saveBtn">Save</button>
@@ -385,6 +458,9 @@
     </div>
   </div>
 </div>
+
+<!-- Printable label output — hidden on screen, shown exclusively via @media print -->
+<div id="printLabelArea"></div>
 
 <!-- Settings -->
 <div class="backdrop" id="backdrop"></div>
@@ -413,16 +489,22 @@
   const LS_SERVER_KEY = 'stockroom_server_url';
   const LS_TOKEN_KEY = 'stockroom_sync_token';
   const LS_AUTOSYNC_KEY = 'stockroom_autosync';
+  const LS_PHOTO_CACHE_KEY = 'stockroom_photo_cache_v1';
+  const LS_PHOTO_QUEUE_KEY = 'stockroom_photo_queue_v1';
   let items = [];
   let editingId = null;
+  let editingPhotoFilename = null;
   let autoSyncTimer = null;
+  let selectedTags = new Set();
+  let highlightId = null;
 
   const grid = document.getElementById('grid');
   const emptyState = document.getElementById('emptyState');
   const searchInput = document.getElementById('searchInput');
-  const tagFilter = document.getElementById('tagFilter');
+  const tagChips = document.getElementById('tagChips');
   const countPill = document.getElementById('countPill');
   const syncStatus = document.getElementById('syncStatus');
+  const highlightBanner = document.getElementById('highlightBanner');
 
   function loadLocal(){
     try{
@@ -446,37 +528,85 @@
     return 'b_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
   }
 
+  // ---------- Photo cache & upload queue ----------
+  // Photos are kept OUT of the synced item metadata (which used to embed
+  // them as base64 and re-transfer every photo on every 30s sync). Instead:
+  // - the compressed photo lives locally in LS_PHOTO_CACHE_KEY (id -> dataURL)
+  //   so this device can always render it, even offline;
+  // - a small queue (LS_PHOTO_QUEUE_KEY) tracks which ids still need
+  //   uploading to the server's separate /api/photos/<id> endpoint;
+  // - other devices fetch the photo directly from the server via a plain
+  //   <img> URL (photoFilename), which is cheap and cacheable, instead of
+  //   it riding along in every metadata sync.
+  function loadPhotoCache(){
+    try{ return JSON.parse(localStorage.getItem(LS_PHOTO_CACHE_KEY) || '{}'); }
+    catch(e){ return {}; }
+  }
+  function savePhotoCache(cache){
+    localStorage.setItem(LS_PHOTO_CACHE_KEY, JSON.stringify(cache));
+  }
+  function loadPhotoQueue(){
+    try{ return JSON.parse(localStorage.getItem(LS_PHOTO_QUEUE_KEY) || '[]'); }
+    catch(e){ return []; }
+  }
+  function savePhotoQueue(queue){
+    localStorage.setItem(LS_PHOTO_QUEUE_KEY, JSON.stringify(queue));
+  }
+  function photoSrc(item){
+    if(!item) return null;
+    const cache = loadPhotoCache();
+    if(cache[item.id]) return cache[item.id];
+    if(item.photoFilename && getServerUrl()){
+      const token = encodeURIComponent(getSyncToken());
+      return `${getServerUrl()}/photos/${item.photoFilename}?token=${token}`;
+    }
+    return null;
+  }
+
   function parseTags(str){
     return str.split(',').map(t=>t.trim()).filter(Boolean);
   }
 
-  function renderTagFilterOptions(){
+  function renderTagChips(){
     const allTags = new Set();
     items.forEach(it => { if(!it.deleted) (it.tags||[]).forEach(t => allTags.add(t)); });
-    const current = tagFilter.value;
-    tagFilter.innerHTML = '<option value="">All tags</option>' +
-      [...allTags].sort().map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-    tagFilter.value = current && allTags.has(current) ? current : '';
+    // Drop any selected tag that no longer exists on any box.
+    [...selectedTags].forEach(t => { if(!allTags.has(t)) selectedTags.delete(t); });
+
+    tagChips.innerHTML = [...allTags].sort().map(t => {
+      const active = selectedTags.has(t);
+      return `<button type="button" class="tag-chip-btn${active ? ' active' : ''}" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</button>`;
+    }).join('');
+
+    tagChips.querySelectorAll('[data-tag]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const t = btn.dataset.tag;
+        if(selectedTags.has(t)) selectedTags.delete(t);
+        else selectedTags.add(t);
+        render();
+      });
+    });
   }
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
-  function matchesFilters(item, q, tag){
+  function matchesFilters(item, q){
     if(item.deleted) return false;
-    if(tag && !(item.tags||[]).includes(tag)) return false;
+    if(highlightId) return item.id === highlightId;
+    if(selectedTags.size && ![...selectedTags].every(t => (item.tags||[]).includes(t))) return false;
     if(!q) return true;
     const hay = [item.box, item.contents, item.location, (item.tags||[]).join(' ')].join(' ').toLowerCase();
     return hay.includes(q);
   }
 
   function render(){
-    renderTagFilterOptions();
+    renderTagChips();
+    highlightBanner.classList.toggle('show', !!highlightId);
     const q = searchInput.value.trim().toLowerCase();
-    const tag = tagFilter.value;
     const filtered = items
-      .filter(it => matchesFilters(it, q, tag))
+      .filter(it => matchesFilters(it, q))
       .sort((a,b) => (a.box||'').localeCompare(b.box||'', undefined, {numeric:true}));
 
     countPill.textContent = `${filtered.length} box${filtered.length===1?'':'es'}`;
@@ -491,9 +621,10 @@
     filtered.forEach(item => {
       const card = document.createElement('div');
       card.className = 'card';
+      const src = photoSrc(item);
       card.innerHTML = `
         <div class="photo-wrap">
-          ${item.photo ? `<img src="${item.photo}" alt="Box ${escapeHtml(item.box)} contents">` : `<span class="no-photo">no photo</span>`}
+          ${src ? `<img src="${src}" alt="Box ${escapeHtml(item.box)} contents" loading="lazy">` : `<span class="no-photo">no photo</span>`}
           <div class="stamp-num">#${escapeHtml(item.box || '?')}</div>
         </div>
         <div class="card-body">
@@ -523,12 +654,22 @@
   const fPhoto = document.getElementById('fPhoto');
   const photoPreview = document.getElementById('photoPreview');
   const deleteBtn = document.getElementById('deleteBtn');
+  const printLabelBtn = document.getElementById('printLabelBtn');
+  const locationList = document.getElementById('locationList');
   let pendingPhotoData = null;
+
+  function refreshLocationList(){
+    const locs = new Set();
+    items.forEach(it => { if(!it.deleted && it.location) locs.add(it.location); });
+    locationList.innerHTML = [...locs].sort().map(l => `<option value="${escapeHtml(l)}">`).join('');
+  }
 
   function openModal(id){
     editingId = id || null;
     pendingPhotoData = null;
+    editingPhotoFilename = null;
     fPhoto.value = '';
+    refreshLocationList();
     if(editingId){
       const item = items.find(i=>i.id===editingId);
       modalTitle.textContent = 'Edit box';
@@ -536,19 +677,22 @@
       fContents.value = item.contents || '';
       fLocation.value = item.location || '';
       fTags.value = (item.tags||[]).join(', ');
-      if(item.photo){
-        photoPreview.src = item.photo;
+      editingPhotoFilename = item.photoFilename || null;
+      const src = photoSrc(item);
+      if(src){
+        photoPreview.src = src;
         photoPreview.style.display = 'block';
-        pendingPhotoData = item.photo;
       } else {
         photoPreview.style.display = 'none';
       }
       deleteBtn.style.display = 'inline-block';
+      printLabelBtn.style.display = 'inline-block';
     } else {
       modalTitle.textContent = 'Add box';
       fBox.value = ''; fContents.value = ''; fLocation.value = ''; fTags.value = '';
       photoPreview.style.display = 'none';
       deleteBtn.style.display = 'none';
+      printLabelBtn.style.display = 'none';
     }
     modalOverlay.classList.add('open');
     fBox.focus();
@@ -589,19 +733,41 @@
   document.getElementById('saveBtn').addEventListener('click', ()=>{
     const box = fBox.value.trim();
     if(!box){ fBox.focus(); return; }
+    const id = editingId || uid();
+
+    let photoFilename;
+    if(pendingPhotoData){
+      // A new photo was chosen: cache it locally (so this device can
+      // render it immediately) and queue it for upload — the actual
+      // transfer happens in the background during the next sync,
+      // separately from the lightweight metadata sync.
+      photoFilename = id + '.jpg';
+      const cache = loadPhotoCache();
+      cache[id] = pendingPhotoData;
+      savePhotoCache(cache);
+      const queue = loadPhotoQueue();
+      if(!queue.includes(id)){
+        queue.push(id);
+        savePhotoQueue(queue);
+      }
+    } else {
+      // No new photo chosen this time — keep whatever was already there.
+      photoFilename = editingPhotoFilename || null;
+    }
+
     const payload = {
       box,
       contents: fContents.value.trim(),
       location: fLocation.value.trim(),
       tags: parseTags(fTags.value),
-      photo: pendingPhotoData || null,
+      photoFilename,
       updatedAt: new Date().toISOString()
     };
     if(editingId){
       const idx = items.findIndex(i=>i.id===editingId);
       items[idx] = { ...items[idx], ...payload };
     } else {
-      items.push({ id: uid(), ...payload });
+      items.push({ id, ...payload });
     }
     saveLocal();
     render();
@@ -621,15 +787,58 @@
       // against older copies still held by other devices.
       items[idx] = { ...items[idx], deleted: true, updatedAt: new Date().toISOString() };
     }
+    // Free the local photo cache and drop it from the upload queue —
+    // no point uploading a photo for a box that's about to disappear.
+    const cache = loadPhotoCache();
+    if(cache[editingId]){
+      delete cache[editingId];
+      savePhotoCache(cache);
+    }
+    const queue = loadPhotoQueue().filter(qid => qid !== editingId);
+    savePhotoQueue(queue);
     saveLocal();
     render();
     closeModal();
     syncSoon();
   });
 
+  printLabelBtn.addEventListener('click', ()=>{
+    if(!editingId) return;
+    const item = items.find(i=>i.id===editingId);
+    if(!item) return;
+    // The QR encodes a link back into this same app with ?boxid=<id> —
+    // scanning it filters the shelf down to just this box (see the
+    // highlightId handling in matchesFilters/init below).
+    const deepLink = location.origin + location.pathname + '?boxid=' + encodeURIComponent(item.id);
+    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(deepLink);
+    const printArea = document.getElementById('printLabelArea');
+    printArea.innerHTML = `
+      <div class="print-label">
+        <div class="stamp">#${escapeHtml(item.box || '?')}</div>
+        <div class="contents">${escapeHtml(item.contents || '')}</div>
+        ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
+        ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
+        <div class="qr-row">
+          <img src="${qrUrl}" alt="QR code linking to this box">
+          <span class="qr-caption">Scan to open<br>this box in Stockroom</span>
+        </div>
+      </div>
+    `;
+    document.body.classList.add('printing');
+    window.print();
+  });
+  window.addEventListener('afterprint', ()=>{
+    document.body.classList.remove('printing');
+  });
+
   // ---------- Search / filter ----------
   searchInput.addEventListener('input', render);
-  tagFilter.addEventListener('change', render);
+
+  document.getElementById('clearHighlightBtn').addEventListener('click', ()=>{
+    highlightId = null;
+    history.replaceState(null, '', location.pathname);
+    render();
+  });
 
   // ---------- Settings drawer ----------
   const settingsPanel = document.getElementById('settingsPanel');
@@ -746,12 +955,43 @@
       render();
       syncStatus.textContent = 'synced ' + new Date().toLocaleTimeString();
       syncStatus.className = 'sync-status ok';
+      await uploadQueuedPhotos(url, tokenParam);
     }catch(e){
       syncStatus.textContent = 'sync failed';
       syncStatus.className = 'sync-status err';
     }
   }
   document.getElementById('syncBtn').addEventListener('click', syncNow);
+
+  async function uploadQueuedPhotos(url, tokenParam){
+    // Runs after the main metadata sync so box data always lands first;
+    // photo bytes are larger and less urgent, and failures here shouldn't
+    // block or fail the metadata sync above.
+    const queue = loadPhotoQueue();
+    if(!queue.length) return;
+    const cache = loadPhotoCache();
+    const stillQueued = [];
+    for(const id of queue){
+      const item = items.find(i => i.id === id);
+      const dataUrl = cache[id];
+      if(!item || item.deleted || !dataUrl){
+        continue; // nothing to upload — drop it from the queue
+      }
+      try{
+        const res = await fetch(`${url}/api/photos/${encodeURIComponent(id)}?${tokenParam}`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({data: dataUrl})
+        });
+        if(!res.ok){
+          stillQueued.push(id); // leave it for next time
+        }
+      }catch(e){
+        stillQueued.push(id); // offline or network hiccup — retry later
+      }
+    }
+    savePhotoQueue(stillQueued);
+  }
 
   // ---------- Auto-sync ----------
   // Two mechanisms: a periodic pull/push while the tab is open (so
@@ -778,6 +1018,8 @@
 
   // ---------- Init ----------
   loadLocal();
+  const boxIdParam = new URLSearchParams(location.search).get('boxid');
+  if(boxIdParam) highlightId = boxIdParam;
   updateSyncStatusLabel();
   render();
   setupAutoSync();
