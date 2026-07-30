@@ -23,20 +23,60 @@ just pointed at this script and a port of your choosing.
 No third-party dependencies. Standard library only.
 """
 
+import hmac
 import json
 import os
+import secrets
 import sys
 import threading
+from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlsplit, parse_qs
+
+# When stdout is redirected to a file (as the LaunchAgent does, via
+# StandardOutPath), Python fully buffers it instead of flushing per line.
+# Since this process runs forever inside serve_forever(), that buffer
+# would never flush on its own — reconfigure it up front so startup
+# messages (including the sync token) actually land in the log file.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+except AttributeError:
+    pass  # older Python without reconfigure(); the flush=True calls below still cover it
 
 PORT = int(os.environ.get("STOCKROOM_PORT", "8787"))
 BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "stockroom_data.json"
 INDEX_FILE = BASE_DIR / "index.html"
+TOKEN_FILE = BASE_DIR / "stockroom_token.txt"
+TOMBSTONE_MAX_AGE_DAYS = 30
 
 _lock = threading.Lock()
+
+
+def get_sync_token():
+    """
+    Reads STOCKROOM_TOKEN from the environment if set (e.g. in the
+    LaunchAgent plist) — otherwise generates one on first run and
+    persists it to TOKEN_FILE (0600 permissions) so it survives restarts
+    without needing manual setup. Either way, print it once at startup
+    so it can be copied into the app's Settings panel.
+    """
+    env_token = os.environ.get("STOCKROOM_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    if TOKEN_FILE.exists():
+        return TOKEN_FILE.read_text(encoding="utf-8").strip()
+    token = secrets.token_hex(16)
+    TOKEN_FILE.write_text(token, encoding="utf-8")
+    try:
+        os.chmod(TOKEN_FILE, 0o600)
+    except OSError:
+        pass
+    return token
+
+
+SYNC_TOKEN = get_sync_token()
 
 
 def load_data():
@@ -74,7 +114,48 @@ def merge_items(existing_items, incoming_items):
     return list(by_id.values())
 
 
+def prune_old_tombstones(items, max_age_days=TOMBSTONE_MAX_AGE_DAYS):
+    """
+    Deleted items are kept as tombstones (deleted: true) so the deletion
+    can win future sync merges — but keeping them forever would grow the
+    file without bound. Once a tombstone is older than max_age_days, any
+    device that still disagreed has had ample time to sync, so it's safe
+    to drop for good.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+    kept = []
+    for item in items:
+        if not item.get("deleted"):
+            kept.append(item)
+            continue
+        raw_ts = item.get("updatedAt", "")
+        try:
+            ts = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+        except ValueError:
+            kept.append(item)  # unparsable timestamp: keep it, don't guess
+            continue
+        if ts >= cutoff:
+            kept.append(item)
+        # else: old enough to prune — dropped
+    return kept
+
+
 class Handler(BaseHTTPRequestHandler):
+    def _parsed_path_and_token(self):
+        """
+        Token travels as a query param (?token=...), not a custom header —
+        deliberately, to avoid the CORS "preflight" check a custom header
+        would trigger, which iOS Safari has long-standing problems with.
+        Same approach media_vault_server.py uses, for the same reason.
+        """
+        parsed = urlsplit(self.path)
+        query = parse_qs(parsed.query)
+        token = query.get("token", [""])[0]
+        return parsed.path, token
+
+    def _token_ok(self, token):
+        return hmac.compare_digest(token, SYNC_TOKEN)
+
     def _send_json(self, status, payload):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
@@ -103,20 +184,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self):
-        path = urlparse(self.path).path
+        path, token = self._parsed_path_and_token()
         if path == "/api/data":
+            if not self._token_ok(token):
+                self._send_json(401, {"error": "Invalid or missing token"})
+                return
             with _lock:
                 data = load_data()
             self._send_json(200, data)
         elif path in ("/", "/index.html"):
+            # The app shell itself stays open — only the data API is
+            # gated. That matches how you'll actually use this: load the
+            # page freely, but it needs the token to read or write boxes.
             self._send_file(INDEX_FILE, "text/html; charset=utf-8")
         else:
             self.send_error(404, "Not found")
 
     def do_POST(self):
-        path = urlparse(self.path).path
+        path, token = self._parsed_path_and_token()
         if path != "/api/data":
             self.send_error(404, "Not found")
+            return
+        if not self._token_ok(token):
+            self._send_json(401, {"error": "Invalid or missing token"})
             return
         length = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(length) if length else b"{}"
@@ -130,6 +220,7 @@ class Handler(BaseHTTPRequestHandler):
         with _lock:
             existing = load_data()
             merged_items = merge_items(existing.get("items", []), incoming_items)
+            merged_items = prune_old_tombstones(merged_items)
             merged = {"items": merged_items}
             save_data(merged)
         self._send_json(200, merged)
@@ -140,8 +231,10 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
-    print(f"Stockroom server running on http://0.0.0.0:{PORT}")
-    print(f"Data file: {DATA_FILE}")
+    print(f"Stockroom server running on http://0.0.0.0:{PORT}", flush=True)
+    print(f"Data file: {DATA_FILE}", flush=True)
+    print(f"Sync token: {SYNC_TOKEN}", flush=True)
+    print("Paste that token into the app's Settings panel alongside the server URL.", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
