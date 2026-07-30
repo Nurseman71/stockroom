@@ -372,6 +372,7 @@
   .print-label .qr-caption{ font-family:'IBM Plex Mono', monospace; font-size:9px; color:#444; }
 
   @media print{
+    body.printing{ min-height:0 !important; height:auto !important; }
     body.printing > *:not(#printLabelArea){ display:none !important; }
     body.printing #printLabelArea{ display:block !important; }
   }
