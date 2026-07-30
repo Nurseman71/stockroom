@@ -292,6 +292,30 @@
     font-size:14px;
   }
   .field textarea{ resize:vertical; min-height:64px; }
+
+  /* ---------- Custom autocomplete (native <datalist> flickers inside
+     modals in Safari, so this replaces it) ---------- */
+  .autocomplete-wrap{ position:relative; }
+  .suggestions-dropdown{
+    display:none;
+    position:absolute;
+    top:calc(100% + 4px);
+    left:0; right:0;
+    background:var(--ink-3);
+    border:1px solid var(--line);
+    border-radius:3px;
+    max-height:160px;
+    overflow-y:auto;
+    z-index:70;
+  }
+  .suggestions-dropdown.show{ display:block; }
+  .suggestion-item{
+    padding:8px 11px;
+    font-size:13.5px;
+    color:var(--paper);
+    cursor:pointer;
+  }
+  .suggestion-item:hover, .suggestion-item.active{ background:var(--steel-dim); }
   .photo-input-row{ display:flex; align-items:center; gap:12px; }
   .photo-preview{
     width:64px; height:48px;
@@ -433,8 +457,10 @@
     </div>
     <div class="field">
       <label for="fLocation">Location</label>
-      <input type="text" id="fLocation" placeholder="e.g. Garage / Shelf B" list="locationList">
-      <datalist id="locationList"></datalist>
+      <div class="autocomplete-wrap">
+        <input type="text" id="fLocation" placeholder="e.g. Garage / Shelf B" autocomplete="off">
+        <div class="suggestions-dropdown" id="locationSuggestions"></div>
+      </div>
     </div>
     <div class="field">
       <label for="fTags">Tags</label>
@@ -656,14 +682,42 @@
   const photoPreview = document.getElementById('photoPreview');
   const deleteBtn = document.getElementById('deleteBtn');
   const printLabelBtn = document.getElementById('printLabelBtn');
-  const locationList = document.getElementById('locationList');
+  const locationSuggestions = document.getElementById('locationSuggestions');
   let pendingPhotoData = null;
+  let allLocations = [];
 
   function refreshLocationList(){
     const locs = new Set();
     items.forEach(it => { if(!it.deleted && it.location) locs.add(it.location); });
-    locationList.innerHTML = [...locs].sort().map(l => `<option value="${escapeHtml(l)}">`).join('');
+    allLocations = [...locs].sort();
   }
+
+  function showLocationSuggestions(){
+    const q = fLocation.value.trim().toLowerCase();
+    const matches = (q ? allLocations.filter(l => l.toLowerCase().includes(q)) : allLocations).slice(0, 8);
+    if(!matches.length){
+      locationSuggestions.classList.remove('show');
+      locationSuggestions.innerHTML = '';
+      return;
+    }
+    locationSuggestions.innerHTML = matches.map(l => `<div class="suggestion-item" data-loc="${escapeHtml(l)}">${escapeHtml(l)}</div>`).join('');
+    locationSuggestions.classList.add('show');
+    locationSuggestions.querySelectorAll('[data-loc]').forEach(el => {
+      // mousedown (not click) fires before the input's blur handler hides
+      // the dropdown, so the value still registers.
+      el.addEventListener('mousedown', (e)=>{
+        e.preventDefault();
+        fLocation.value = el.dataset.loc;
+        locationSuggestions.classList.remove('show');
+      });
+    });
+  }
+  function hideLocationSuggestions(){
+    locationSuggestions.classList.remove('show');
+  }
+  fLocation.addEventListener('input', showLocationSuggestions);
+  fLocation.addEventListener('focus', showLocationSuggestions);
+  fLocation.addEventListener('blur', ()=> setTimeout(hideLocationSuggestions, 120));
 
   function openModal(id){
     editingId = id || null;
@@ -701,6 +755,7 @@
   function closeModal(){
     modalOverlay.classList.remove('open');
     editingId = null;
+    hideLocationSuggestions();
   }
 
   document.getElementById('addBtn').addEventListener('click', ()=>openModal(null));
