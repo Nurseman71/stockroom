@@ -437,7 +437,7 @@
 
   function renderTagFilterOptions(){
     const allTags = new Set();
-    items.forEach(it => (it.tags||[]).forEach(t => allTags.add(t)));
+    items.forEach(it => { if(!it.deleted) (it.tags||[]).forEach(t => allTags.add(t)); });
     const current = tagFilter.value;
     tagFilter.innerHTML = '<option value="">All tags</option>' +
       [...allTags].sort().map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
@@ -449,6 +449,7 @@
   }
 
   function matchesFilters(item, q, tag){
+    if(item.deleted) return false;
     if(tag && !(item.tags||[]).includes(tag)) return false;
     if(!q) return true;
     const hay = [item.box, item.contents, item.location, (item.tags||[]).join(' ')].join(' ').toLowerCase();
@@ -595,7 +596,15 @@
   deleteBtn.addEventListener('click', ()=>{
     if(!editingId) return;
     if(!confirm('Delete this box entry? This cannot be undone.')) return;
-    items = items.filter(i=>i.id!==editingId);
+    const idx = items.findIndex(i=>i.id===editingId);
+    if(idx !== -1){
+      // Soft-delete: keep a tombstone so the deletion can travel through
+      // sync (a removed-from-array item looks identical to "never told
+      // the server about it", so a plain removal gets resurrected on
+      // the next sync). The tombstone's updatedAt lets it win merges
+      // against older copies still held by other devices.
+      items[idx] = { ...items[idx], deleted: true, updatedAt: new Date().toISOString() };
+    }
     saveLocal();
     render();
     closeModal();
@@ -629,7 +638,7 @@
 
   // ---------- Export / Import ----------
   document.getElementById('exportBtn').addEventListener('click', ()=>{
-    const blob = new Blob([JSON.stringify({items}, null, 2)], {type:'application/json'});
+    const blob = new Blob([JSON.stringify({items: items.filter(i=>!i.deleted)}, null, 2)], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
