@@ -868,20 +868,41 @@
     const deepLink = location.origin + location.pathname + '?boxid=' + encodeURIComponent(item.id);
     const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(deepLink);
     const printArea = document.getElementById('printLabelArea');
-    printArea.innerHTML = `
-      <div class="print-label">
-        <div class="stamp">#${escapeHtml(item.box || '?')}</div>
-        <div class="contents">${escapeHtml(item.contents || '')}</div>
-        ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
-        ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
-        <div class="qr-row">
-          <img src="${qrUrl}" alt="QR code linking to this box">
-          <span class="qr-caption">Scan to open<br>this box in Stockroom</span>
+
+    function buildLabelHtml(qrHtml){
+      return `
+        <div class="print-label">
+          <div class="stamp">#${escapeHtml(item.box || '?')}</div>
+          <div class="contents">${escapeHtml(item.contents || '')}</div>
+          ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
+          ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
+          <div class="qr-row">
+            ${qrHtml}
+            <span class="qr-caption">Scan to open<br>this box in Stockroom</span>
+          </div>
         </div>
-      </div>
-    `;
-    document.body.classList.add('printing');
-    window.print();
+      `;
+    }
+
+    function doPrint(){
+      document.body.classList.add('printing');
+      window.print();
+    }
+
+    // window.print() would otherwise fire before the browser finishes
+    // fetching the QR image from the external service, printing a blank
+    // box. Load it first and only print once it's actually ready — and
+    // still print (without the QR) if the fetch fails, e.g. offline.
+    const qrImg = new Image();
+    qrImg.onload = () => {
+      printArea.innerHTML = buildLabelHtml(`<img src="${qrUrl}" alt="QR code linking to this box">`);
+      doPrint();
+    };
+    qrImg.onerror = () => {
+      printArea.innerHTML = buildLabelHtml('<span class="qr-caption">(QR code unavailable — no connection)</span>');
+      doPrint();
+    };
+    qrImg.src = qrUrl;
   });
   window.addEventListener('afterprint', ()=>{
     document.body.classList.remove('printing');
