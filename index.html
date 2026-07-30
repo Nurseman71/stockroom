@@ -390,10 +390,16 @@
 <div class="backdrop" id="backdrop"></div>
 <div class="settings-panel" id="settingsPanel">
   <h2>Sync settings</h2>
-  <p>Point this at your storage_tracker_server.py instance (e.g. your Tailscale address) to sync boxes across devices. Leave blank to work fully offline in this browser.</p>
+  <p>Point this at your storage_tracker_server.py instance (e.g. your Tailscale address) to sync boxes across devices. The server prints a sync token to its terminal on startup — paste that below too. Leave both blank to work fully offline in this browser.</p>
   <label style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">Server URL</label>
   <input type="text" id="serverUrlInput" placeholder="https://your-mac.tailnet.ts.net:8787">
+  <label style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:var(--muted); text-transform:uppercase; letter-spacing:0.05em;">Sync token</label>
+  <input type="text" id="syncTokenInput" placeholder="printed in the server's terminal on startup">
   <button class="btn-primary" id="saveSettingsBtn" style="width:100%; margin-top:6px;">Save</button>
+  <label style="display:flex; align-items:center; gap:8px; margin-top:16px; font-size:13px; color:var(--paper); cursor:pointer;">
+    <input type="checkbox" id="autoSyncToggle" style="width:auto;">
+    Auto-sync every 30s while this tab is open
+  </label>
   <hr style="border:none; border-top:1px solid var(--line); margin:20px 0;">
   <p>Backup</p>
   <button id="exportBtn" style="width:100%; margin-bottom:8px;">Export JSON</button>
@@ -405,8 +411,11 @@
 (function(){
   const LS_KEY = 'stockroom_items_v1';
   const LS_SERVER_KEY = 'stockroom_server_url';
+  const LS_TOKEN_KEY = 'stockroom_sync_token';
+  const LS_AUTOSYNC_KEY = 'stockroom_autosync';
   let items = [];
   let editingId = null;
+  let autoSyncTimer = null;
 
   const grid = document.getElementById('grid');
   const emptyState = document.getElementById('emptyState');
@@ -426,6 +435,12 @@
   }
   function getServerUrl(){
     return (localStorage.getItem(LS_SERVER_KEY) || '').trim().replace(/\/$/, '');
+  }
+  function getSyncToken(){
+    return (localStorage.getItem(LS_TOKEN_KEY) || '').trim();
+  }
+  function getAutoSyncEnabled(){
+    return localStorage.getItem(LS_AUTOSYNC_KEY) === '1';
   }
   function uid(){
     return 'b_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2,8);
@@ -591,6 +606,7 @@
     saveLocal();
     render();
     closeModal();
+    syncSoon();
   });
 
   deleteBtn.addEventListener('click', ()=>{
@@ -608,6 +624,7 @@
     saveLocal();
     render();
     closeModal();
+    syncSoon();
   });
 
   // ---------- Search / filter ----------
@@ -618,9 +635,13 @@
   const settingsPanel = document.getElementById('settingsPanel');
   const backdrop = document.getElementById('backdrop');
   const serverUrlInput = document.getElementById('serverUrlInput');
+  const syncTokenInput = document.getElementById('syncTokenInput');
+  const autoSyncToggle = document.getElementById('autoSyncToggle');
 
   function openSettings(){
     serverUrlInput.value = getServerUrl();
+    syncTokenInput.value = getSyncToken();
+    autoSyncToggle.checked = getAutoSyncEnabled();
     settingsPanel.classList.add('open');
     backdrop.classList.add('open');
   }
@@ -632,8 +653,11 @@
   backdrop.addEventListener('click', closeSettings);
   document.getElementById('saveSettingsBtn').addEventListener('click', ()=>{
     localStorage.setItem(LS_SERVER_KEY, serverUrlInput.value.trim());
+    localStorage.setItem(LS_TOKEN_KEY, syncTokenInput.value.trim());
+    localStorage.setItem(LS_AUTOSYNC_KEY, autoSyncToggle.checked ? '1' : '0');
     closeSettings();
     updateSyncStatusLabel();
+    setupAutoSync();
   });
 
   // ---------- Export / Import ----------
@@ -659,6 +683,7 @@
         items = mergeItems(items, incoming);
         saveLocal();
         render();
+        syncSoon();
         alert(`Imported ${incoming.length} boxes.`);
       }catch(err){
         alert('Could not read that file — is it a Stockroom export?');
@@ -692,17 +717,29 @@
       openSettings();
       return;
     }
+    const token = getSyncToken();
+    const tokenParam = 'token=' + encodeURIComponent(token);
     syncStatus.textContent = 'syncing…';
     syncStatus.className = 'sync-status';
     try{
-      const getRes = await fetch(url + '/api/data');
+      const getRes = await fetch(url + '/api/data?' + tokenParam);
+      if(getRes.status === 401){
+        syncStatus.textContent = 'sync token rejected';
+        syncStatus.className = 'sync-status err';
+        return;
+      }
       const serverData = await getRes.json();
       const merged = mergeItems(items, serverData.items || []);
-      const postRes = await fetch(url + '/api/data', {
+      const postRes = await fetch(url + '/api/data?' + tokenParam, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({items: merged})
       });
+      if(postRes.status === 401){
+        syncStatus.textContent = 'sync token rejected';
+        syncStatus.className = 'sync-status err';
+        return;
+      }
       const finalData = await postRes.json();
       items = finalData.items || merged;
       saveLocal();
@@ -716,10 +753,34 @@
   }
   document.getElementById('syncBtn').addEventListener('click', syncNow);
 
+  // ---------- Auto-sync ----------
+  // Two mechanisms: a periodic pull/push while the tab is open (so
+  // changes made on *other* devices show up here without a manual tap),
+  // and a fire-and-forget sync right after any local change (so this
+  // device's own edits go out promptly instead of waiting for the timer).
+  function setupAutoSync(){
+    if(autoSyncTimer){
+      clearInterval(autoSyncTimer);
+      autoSyncTimer = null;
+    }
+    if(getAutoSyncEnabled() && getServerUrl()){
+      autoSyncTimer = setInterval(syncNow, 30000);
+    }
+  }
+  function syncSoon(){
+    // Fire-and-forget: don't block the UI on network round-trips for
+    // routine edits, and don't fail loudly if offline — the periodic
+    // timer (or the next manual Sync) will catch it up regardless.
+    if(getAutoSyncEnabled() && getServerUrl()){
+      syncNow();
+    }
+  }
+
   // ---------- Init ----------
   loadLocal();
   updateSyncStatusLabel();
   render();
+  setupAutoSync();
   if(getServerUrl()) syncNow();
 })();
 </script>
