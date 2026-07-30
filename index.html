@@ -4,6 +4,18 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stockroom — Storage Tracker</title>
+
+<!-- Add to Home Screen: launches full-screen without browser chrome,
+     with a proper icon and matching status bar instead of Safari's
+     generic page-snapshot icon. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Stockroom">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#1C1F26">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/favicon-32.png" sizes="32x32">
+
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -103,7 +115,7 @@
     padding:9px 12px;
     border-radius:3px;
     font-family:'IBM Plex Sans', sans-serif;
-    font-size:13.5px;
+    font-size:16px;
   }
   #searchInput{ flex:1; min-width:180px; }
   .count-pill{
@@ -289,7 +301,7 @@
     padding:10px 11px;
     border-radius:3px;
     font-family:'IBM Plex Sans', sans-serif;
-    font-size:14px;
+    font-size:16px;
   }
   .field textarea{ resize:vertical; min-height:64px; }
 
@@ -359,7 +371,7 @@
     padding:9px 10px;
     border-radius:3px;
     font-family:'IBM Plex Mono', monospace;
-    font-size:12.5px;
+    font-size:16px;
     margin-bottom:10px;
   }
   .backdrop{
@@ -403,6 +415,23 @@
 
   @media (prefers-reduced-motion: reduce){
     *{ transition:none !important; }
+  }
+
+  /* ---------- Phone-width layout fixes ---------- */
+  @media (max-width: 640px){
+    header{ flex-direction:column; align-items:flex-start; padding:20px 16px 16px; }
+    .header-actions{ width:100%; flex-wrap:wrap; }
+    .header-actions button{ flex:1; min-width:0; }
+    .toolbar{ padding:14px 16px; flex-direction:column; align-items:stretch; }
+    #searchInput{ width:100%; }
+    main{ padding:18px 16px 60px; }
+    .grid{ grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; }
+    .tag-chip-btn{ padding:8px 14px; font-size:12.5px; }
+    .modal{ padding:18px; max-width:100%; }
+    .modal-footer{ flex-direction:column; align-items:stretch; gap:10px; }
+    .modal-footer > div{ display:flex; gap:8px; }
+    .modal-footer .right{ justify-content:flex-end; }
+    .settings-panel{ width:100%; max-width:100%; }
   }
 </style>
 </head>
