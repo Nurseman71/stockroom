@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Stockroom — Storage Tracker</title>
 
 <!-- Add to Home Screen: launches full-screen without browser chrome,
@@ -34,6 +34,7 @@
   }
   *{box-sizing:border-box;}
   html,body{margin:0;padding:0;}
+  html{ background:var(--ink); } /* prevents a white flash during iOS's elastic overscroll bounce */
   body{
     background:var(--ink);
     color:var(--paper);
@@ -44,7 +45,7 @@
 
   /* ---------- Header ---------- */
   header{
-    padding:28px 28px 20px;
+    padding:calc(28px + env(safe-area-inset-top)) 28px 20px;
     border-bottom:2px solid var(--line);
     display:flex;
     align-items:flex-end;
@@ -167,7 +168,7 @@
   .highlight-banner.show{ display:flex; }
 
   /* ---------- Grid ---------- */
-  main{ padding:24px 28px 60px; }
+  main{ padding:24px 28px calc(60px + env(safe-area-inset-bottom)); }
   .grid{
     display:grid;
     grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
@@ -263,7 +264,7 @@
     display:none;
     align-items:flex-start;
     justify-content:center;
-    padding:40px 16px;
+    padding:calc(40px + env(safe-area-inset-top)) 16px calc(40px + env(safe-area-inset-bottom));
     overflow-y:auto;
     z-index:50;
   }
@@ -354,7 +355,7 @@
     max-width:90vw;
     background:var(--ink-2);
     border-left:1px solid var(--line);
-    padding:24px;
+    padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom));
     transform:translateX(100%);
     transition:transform 0.2s ease;
     z-index:60;
@@ -419,12 +420,12 @@
 
   /* ---------- Phone-width layout fixes ---------- */
   @media (max-width: 640px){
-    header{ flex-direction:column; align-items:flex-start; padding:20px 16px 16px; }
+    header{ flex-direction:column; align-items:flex-start; padding:calc(20px + env(safe-area-inset-top)) 16px 16px; }
     .header-actions{ width:100%; flex-wrap:wrap; }
     .header-actions button{ flex:1; min-width:0; }
     .toolbar{ padding:14px 16px; flex-direction:column; align-items:stretch; }
     #searchInput{ width:100%; }
-    main{ padding:18px 16px 60px; }
+    main{ padding:18px 16px calc(60px + env(safe-area-inset-bottom)); }
     .grid{ grid-template-columns:repeat(auto-fill, minmax(150px, 1fr)); gap:12px; }
     .tag-chip-btn{ padding:8px 14px; font-size:12.5px; }
     .modal{ padding:18px; max-width:100%; }
@@ -432,6 +433,22 @@
     .modal-footer > div{ display:flex; gap:8px; }
     .modal-footer .right{ justify-content:flex-end; }
     .settings-panel{ width:100%; max-width:100%; }
+  }
+
+  /* ---------- Touch-friendly tap targets ----------
+     Apple HIG recommends a 44x44pt minimum for anything meant to be
+     tapped. Scoped to pointer:coarse (touchscreens) rather than applied
+     everywhere, so mouse users on desktop keep the more compact,
+     precise-pointer sizing instead of oversized buttons. Placed after
+     the breakpoint block above so it wins on source order for any
+     overlapping properties (e.g. .tag-chip-btn padding) when both
+     conditions are true, as they are on a phone. */
+  @media (pointer: coarse){
+    button, .btn{ padding:13px 16px; }
+    .tag-chip-btn{ padding:13px 16px; }
+    .suggestion-item{ padding:13px 14px; }
+    .card-actions button{ padding:13px 8px; }
+    .chip{ padding:6px 10px; } /* display-only, not tappable — modest bump for legibility, not a full target */
   }
 </style>
 </head>
