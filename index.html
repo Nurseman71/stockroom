@@ -303,7 +303,7 @@
     font-family:'IBM Plex Sans', sans-serif;
     font-size:16px;
   }
-  .field textarea{ resize:vertical; min-height:64px; }
+  .field textarea{ resize:vertical; min-height:140px; max-height:400px; }
 
   /* ---------- Custom autocomplete (native <datalist> flickers inside
      modals in Safari, so this replaces it) ---------- */
@@ -757,6 +757,16 @@
     locationSuggestions.classList.remove('show');
   }
   fLocation.addEventListener('input', showLocationSuggestions);
+
+  // Contents grows to fit what's typed or inserted (e.g. by Identify
+  // items), instead of staying a fixed small box you have to scroll —
+  // capped by the textarea's own max-height in CSS, beyond which it
+  // scrolls normally.
+  function autoResizeContents(){
+    fContents.style.height = 'auto';
+    fContents.style.height = fContents.scrollHeight + 'px';
+  }
+  fContents.addEventListener('input', autoResizeContents);
   fLocation.addEventListener('focus', showLocationSuggestions);
   fLocation.addEventListener('blur', ()=> setTimeout(hideLocationSuggestions, 120));
 
@@ -792,6 +802,7 @@
     }
     updateIdentifyBtnVisibility();
     modalOverlay.classList.add('open');
+    autoResizeContents();
     fBox.focus();
   }
   function closeModal(){
@@ -878,6 +889,7 @@
       }
       const existing = fContents.value.trim();
       fContents.value = existing ? `${existing}\n${result.items}` : result.items;
+      autoResizeContents();
       identifyStatus.textContent = 'Added to Contents — review before saving.';
     }catch(e){
       identifyStatus.textContent = 'Identify failed — check your connection.';
