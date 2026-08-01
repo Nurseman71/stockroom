@@ -30,6 +30,8 @@ import os
 import secrets
 import sys
 import threading
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -51,7 +53,21 @@ DATA_FILE = BASE_DIR / "stockroom_data.json"
 INDEX_FILE = BASE_DIR / "index.html"
 TOKEN_FILE = BASE_DIR / "stockroom_token.txt"
 PHOTOS_DIR = BASE_DIR / "photos"
+GEMINI_KEY_FILE = BASE_DIR / "gemini_api_key.txt"
 TOMBSTONE_MAX_AGE_DAYS = 30
+
+# Google renames/retires Gemini model IDs often (multiple times in 2026
+# alone) — if identify-photo starts failing with a 404-ish "model not
+# found" error, check https://ai.google.dev/gemini-api/docs/models for
+# the current flash-tier model name and update this one constant.
+GEMINI_MODEL = "gemini-3.5-flash"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+GEMINI_PROMPT = (
+    "List the distinct individual items visible in this photo of the "
+    "contents of a storage box. Respond with ONLY the item names, one "
+    "per line — no numbering, no bullets, no extra commentary, no "
+    "markdown formatting."
+)
 
 PHOTOS_DIR.mkdir(exist_ok=True)
 
@@ -80,7 +96,25 @@ def get_sync_token():
     return token
 
 
+def get_gemini_api_key():
+    """
+    Unlike the sync token, this can't be auto-generated — it has to be a
+    key you created yourself in Google AI Studio. Checks GEMINI_API_KEY
+    in the environment first (e.g. set in the LaunchAgent plist),
+    otherwise reads it from GEMINI_KEY_FILE. Returns "" (not None) if
+    neither is set, so the identify-photo endpoint can respond with a
+    clear "not configured" message instead of crashing.
+    """
+    env_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if env_key:
+        return env_key
+    if GEMINI_KEY_FILE.exists():
+        return GEMINI_KEY_FILE.read_text(encoding="utf-8").strip()
+    return ""
+
+
 SYNC_TOKEN = get_sync_token()
+GEMINI_API_KEY = get_gemini_api_key()
 
 
 def load_data():
@@ -160,6 +194,56 @@ def photo_path_for_id(item_id):
     if not item_id or "/" in item_id or "\\" in item_id or item_id in (".", ".."):
         return None
     return PHOTOS_DIR / f"{item_id}.jpg"
+
+
+def identify_items_in_photo(photo_bytes):
+    """
+    Sends the photo to Gemini's generateContent endpoint and returns the
+    plain-text list of items it names. Raises RuntimeError with a message
+    already safe to show the user on any failure (missing key, network
+    issue, Gemini error response, or an empty/blocked result).
+    """
+    if not GEMINI_API_KEY:
+        raise RuntimeError(
+            "No Gemini API key configured on the server. Save one to "
+            f"{GEMINI_KEY_FILE.name} next to the server script, or set "
+            "the GEMINI_API_KEY environment variable, then restart."
+        )
+
+    request_body = json.dumps({
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(photo_bytes).decode("ascii")}},
+                {"text": GEMINI_PROMPT},
+            ]
+        }]
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+        data=request_body,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"Gemini API error ({e.code}): {detail}")
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"Couldn't reach Gemini API: {e.reason}")
+    except (TimeoutError, OSError) as e:
+        raise RuntimeError(f"Gemini API request timed out or failed: {e}")
+
+    try:
+        candidates = response_data.get("candidates", [])
+        text = candidates[0]["content"]["parts"][0]["text"].strip()
+    except (KeyError, IndexError, TypeError):
+        raise RuntimeError("Gemini didn't return a usable result for this photo (it may have been blocked).")
+    if not text:
+        raise RuntimeError("Gemini returned an empty result for this photo.")
+    return text
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -242,6 +326,32 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path, token = self._parsed_path_and_token()
+
+        if path == "/api/identify-photo":
+            if not self._token_ok(token):
+                self._send_json(401, {"error": "Invalid or missing token"})
+                return
+            length = int(self.headers.get("Content-Length", 0))
+            raw = self.rfile.read(length) if length else b"{}"
+            try:
+                payload = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._send_json(400, {"error": "invalid JSON"})
+                return
+            data_url = payload.get("data", "")
+            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+            try:
+                photo_bytes = base64.b64decode(b64)
+            except (ValueError, TypeError):
+                self._send_json(400, {"error": "invalid photo data"})
+                return
+            try:
+                items_text = identify_items_in_photo(photo_bytes)
+            except RuntimeError as e:
+                self._send_json(502, {"error": str(e)})
+                return
+            self._send_json(200, {"items": items_text})
+            return
 
         if path.startswith("/api/photos/"):
             if not self._token_ok(token):

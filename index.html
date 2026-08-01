@@ -501,6 +501,10 @@
         <input type="file" id="fPhoto" accept="image/*">
         <img id="photoPreview" class="photo-preview">
       </div>
+      <div class="photo-input-row" style="margin-top:8px;">
+        <button type="button" id="identifyPhotoBtn" style="display:none;">✨ Identify items</button>
+        <span id="identifyStatus" style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:var(--muted);"></span>
+      </div>
     </div>
     <div class="modal-footer">
       <div>
@@ -711,9 +715,17 @@
   const photoPreview = document.getElementById('photoPreview');
   const deleteBtn = document.getElementById('deleteBtn');
   const printLabelBtn = document.getElementById('printLabelBtn');
+  const identifyPhotoBtn = document.getElementById('identifyPhotoBtn');
+  const identifyStatus = document.getElementById('identifyStatus');
   const locationSuggestions = document.getElementById('locationSuggestions');
   let pendingPhotoData = null;
   let allLocations = [];
+
+  function updateIdentifyBtnVisibility(){
+    const hasPhoto = !!pendingPhotoData || photoPreview.style.display === 'block';
+    identifyPhotoBtn.style.display = hasPhoto ? 'inline-block' : 'none';
+    if(!hasPhoto) identifyStatus.textContent = '';
+  }
 
   function refreshLocationList(){
     const locs = new Set();
@@ -778,6 +790,7 @@
       deleteBtn.style.display = 'none';
       printLabelBtn.style.display = 'none';
     }
+    updateIdentifyBtnVisibility();
     modalOverlay.classList.add('open');
     fBox.focus();
   }
@@ -809,10 +822,69 @@
         pendingPhotoData = canvas.toDataURL('image/jpeg', 0.62);
         photoPreview.src = pendingPhotoData;
         photoPreview.style.display = 'block';
+        updateIdentifyBtnVisibility();
       };
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
+  });
+
+  async function currentPhotoAsDataUrl(){
+    // A freshly-picked photo is already a data URL in memory.
+    if(pendingPhotoData) return pendingPhotoData;
+    // Otherwise use whatever's showing in the preview — already a data
+    // URL if it came from the local photo cache, or a server URL if this
+    // device never cached it. Either way, fetch+convert so the identify
+    // endpoint always gets a data URL to work with.
+    if(photoPreview.style.display === 'block' && photoPreview.src){
+      if(photoPreview.src.startsWith('data:')) return photoPreview.src;
+      const res = await fetch(photoPreview.src);
+      const blob = await res.blob();
+      return await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+    }
+    return null;
+  }
+
+  identifyPhotoBtn.addEventListener('click', async ()=>{
+    const url = getServerUrl();
+    const token = getSyncToken();
+    if(!url || !token){
+      identifyStatus.textContent = 'Set up Server URL + Sync token in Settings first.';
+      return;
+    }
+    identifyPhotoBtn.disabled = true;
+    identifyPhotoBtn.textContent = '✨ Identifying…';
+    identifyStatus.textContent = '';
+    try{
+      const dataUrl = await currentPhotoAsDataUrl();
+      if(!dataUrl){
+        identifyStatus.textContent = 'No photo to identify yet.';
+        return;
+      }
+      const res = await fetch(`${url}/api/identify-photo?token=${encodeURIComponent(token)}`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({data: dataUrl})
+      });
+      const result = await res.json();
+      if(!res.ok){
+        identifyStatus.textContent = result.error || 'Identify failed.';
+        return;
+      }
+      const existing = fContents.value.trim();
+      fContents.value = existing ? `${existing}\n${result.items}` : result.items;
+      identifyStatus.textContent = 'Added to Contents — review before saving.';
+    }catch(e){
+      identifyStatus.textContent = 'Identify failed — check your connection.';
+    }finally{
+      identifyPhotoBtn.disabled = false;
+      identifyPhotoBtn.textContent = '✨ Identify items';
+    }
   });
 
   document.getElementById('saveBtn').addEventListener('click', ()=>{
