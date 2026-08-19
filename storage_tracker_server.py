@@ -21,6 +21,12 @@ you already use for media_vault_server.py — same ProgramArguments style,
 just pointed at this script and a port of your choosing.
 
 No third-party dependencies. Standard library only.
+
+Cross-project note: this port (default 8787, override via STOCKROOM_PORT)
+is tracked in ~/Jarvis/PROJECTS.md, the shared registry of ports/services/
+keys across all local projects on this machine. Check that file before
+changing this port or adding another background service, and update its
+row there in the same session as the change.
 """
 
 import base64
