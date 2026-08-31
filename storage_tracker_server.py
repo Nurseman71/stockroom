@@ -31,6 +31,7 @@ row there in the same session as the change.
 
 import base64
 import hmac
+import ipaddress
 import json
 import os
 import secrets
@@ -52,6 +53,29 @@ try:
     sys.stdout.reconfigure(line_buffering=True)
 except AttributeError:
     pass  # older Python without reconfigure(); the flush=True calls below still cover it
+
+# Which clients are trusted enough to be handed the sync token in the
+# page itself (see _send_index_with_token). Tailscale assigns every node
+# an address in 100.64.0.0/10, so "arrived over the tailnet" is a simple
+# range check; loopback covers the Mac talking to itself.
+#
+# The server binds 0.0.0.0, which means anything on the home LAN can also
+# reach it. Those clients still get the app, but not the credential --
+# they see an empty shelf, exactly like any stranger's browser.
+TAILSCALE_NET = ipaddress.ip_network("100.64.0.0/10")
+
+
+def is_trusted_client(addr):
+    """True for tailnet peers and this machine; False for LAN and anything else."""
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    # IPv6-mapped IPv4 (::ffff:100.x.y.z) arrives on dual-stack sockets.
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip in TAILSCALE_NET
+
 
 PORT = int(os.environ.get("STOCKROOM_PORT", "8787"))
 BASE_DIR = Path(__file__).resolve().parent
@@ -309,17 +333,18 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "Not found")
             return
         html = INDEX_FILE.read_text(encoding="utf-8")
-        # json.dumps handles the quoting; the token is hex, so there is
-        # nothing here that could close the script tag early.
-        bootstrap = (
-            "<script>window.__STOCKROOM_BOOTSTRAP__ = "
-            + json.dumps({"token": SYNC_TOKEN})
-            + ";</script>"
-        )
-        if "</head>" in html:
-            html = html.replace("</head>", bootstrap + "\n</head>", 1)
-        else:
-            html = bootstrap + html
+        if is_trusted_client(self.client_address[0]):
+            # json.dumps handles the quoting; the token is hex, so there
+            # is nothing here that could close the script tag early.
+            bootstrap = (
+                "<script>window.__STOCKROOM_BOOTSTRAP__ = "
+                + json.dumps({"token": SYNC_TOKEN})
+                + ";</script>"
+            )
+            if "</head>" in html:
+                html = html.replace("</head>", bootstrap + "\n</head>", 1)
+            else:
+                html = bootstrap + html
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -382,12 +407,11 @@ class Handler(BaseHTTPRequestHandler):
             # automatically and shows the box, with no trip through
             # Settings and no token typed on a phone keyboard.
             #
-            # Trade-off, deliberately accepted: the page is served
-            # without auth, so anyone who can reach this host can now
-            # read and write the inventory. The token still gates other
-            # origins (the GitHub Pages copy), which must be configured
-            # by hand. Since the server binds 0.0.0.0, "reach this host"
-            # means the tailnet AND the local network.
+            # The token only goes to clients on the tailnet or on this
+            # machine -- see is_trusted_client. A device on the home LAN
+            # can still load the app shell, but gets no credential and so
+            # sees an empty shelf. Other origins (the GitHub Pages copy)
+            # are unaffected and must still be configured by hand.
             self._send_index_with_token()
         else:
             self.send_error(404, "Not found")
