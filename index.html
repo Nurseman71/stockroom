@@ -408,10 +408,39 @@
   .print-label .qr-row img{ width:1.1in; height:1.1in; }
   .print-label .qr-caption{ font-family:'IBM Plex Mono', monospace; font-size:9px; color:#444; }
 
+  /* Label view: shows ONLY the label on screen, so iOS Safari's
+     Share > Print produces a clean label page even when window.print()
+     is a no-op. */
+  html.labelview, body.labelview{ background:#fff !important; }
+  body.labelview{ color:#000 !important; }
+  body.labelview > *:not(#printLabelArea):not(#labelViewBar){ display:none !important; }
+  body.labelview #printLabelArea{ display:block !important; margin:70px auto 40px; }
+  body.labelview .print-label{ margin:0 auto; }
+  #labelViewBar{
+    display:none;
+    position:fixed; top:0; left:0; right:0; z-index:200;
+    background:#111; color:#fff;
+    font-family:'IBM Plex Sans', sans-serif; font-size:13px;
+    padding:12px 14px; padding-top:calc(12px + env(safe-area-inset-top));
+    align-items:center; justify-content:space-between; gap:10px;
+  }
+  body.labelview #labelViewBar{ display:flex; }
+  #labelViewBar button{
+    background:#fff; color:#111; border:0; border-radius:6px;
+    padding:8px 14px; font-size:13px; font-weight:600; min-height:38px;
+  }
+
   @media print{
-    body.printing{ min-height:0 !important; height:auto !important; }
+    /* html carries the app's dark background, so whitening body alone
+       is not enough -- iOS Safari's Share > Print paints the html
+       background and the label came out on black. */
+    html, body{ background:#fff !important; color:#000 !important; }
+    body.printing, body.labelview{ min-height:0 !important; height:auto !important; }
     body.printing > *:not(#printLabelArea){ display:none !important; }
     body.printing #printLabelArea{ display:block !important; }
+    #labelViewBar{ display:none !important; }
+    body.labelview #printLabelArea{ margin:0 !important; }
+    body.labelview .print-label{ margin:0 !important; }  /* match the Mac's top-left placement */
   }
 
   @media (prefers-reduced-motion: reduce){
@@ -537,6 +566,10 @@
 </div>
 
 <!-- Printable label output — hidden on screen, shown exclusively via @media print -->
+<div id="labelViewBar">
+  <span>Use the Share button, then Print, to print this label.</span>
+  <button type="button" id="labelViewDone">Done</button>
+</div>
 <div id="printLabelArea"></div>
 
 <!-- Settings -->
@@ -810,6 +843,7 @@
       }
       deleteBtn.style.display = 'inline-block';
       printLabelBtn.style.display = 'inline-block';
+      prefetchQr(item);
     } else {
       modalTitle.textContent = 'Add box';
       fBox.value = ''; fContents.value = ''; fLocation.value = ''; fTags.value = '';
@@ -988,52 +1022,112 @@
     syncSoon();
   });
 
+  // ---------- Label printing ----------
+  // iOS Safari ignores window.print() when it is called outside the
+  // user gesture that started it. The old code fetched the QR image
+  // first and printed from the image's onload callback -- by then the
+  // gesture was gone, so on iPhone the button did nothing at all
+  // (desktop browsers are lenient, which is why the Mac worked).
+  // Fix: fetch the QR ahead of time (when the box is opened for edit),
+  // cache it as a data URL, and render synchronously inside the click.
+  let qrCache = { id:null, dataUrl:null, pending:null };
+
+  function boxDeepLink(item){
+    return location.origin + location.pathname + '?boxid=' + encodeURIComponent(item.id);
+  }
+  function qrRemoteUrl(item){
+    return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' +
+           encodeURIComponent(boxDeepLink(item));
+  }
+  function prefetchQr(item){
+    if(!item || qrCache.id === item.id) return;
+    qrCache = { id:item.id, dataUrl:null, pending:true };
+    const id = item.id;
+    fetch(qrRemoteUrl(item))
+      .then(r => r.ok ? r.blob() : Promise.reject(new Error('HTTP ' + r.status)))
+      .then(blob => new Promise((res, rej)=>{
+        const fr = new FileReader();
+        fr.onload = ()=>res(fr.result);
+        fr.onerror = rej;
+        fr.readAsDataURL(blob);
+      }))
+      .then(dataUrl => { if(qrCache.id === id){ qrCache.dataUrl = dataUrl; qrCache.pending = false; } })
+      .catch(()=>{ if(qrCache.id === id){ qrCache.pending = false; } });
+  }
+
+  function buildLabelHtml(item, qrHtml){
+    return `
+      <div class="print-label">
+        <div class="stamp">#${escapeHtml(item.box || '?')}</div>
+        <div class="contents">${escapeHtml(item.contents || '')}</div>
+        ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
+        ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
+        <div class="qr-row">
+          ${qrHtml}
+          <span class="qr-caption">Scan to open<br>this box in Stockroom</span>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderLabel(item){
+    // Prefer the cached data URL: it needs no network at print time, so
+    // the QR is guaranteed to be painted before the print dialog opens.
+    let qrHtml;
+    if(qrCache.id === item.id && qrCache.dataUrl){
+      qrHtml = `<img src="${qrCache.dataUrl}" alt="QR code linking to this box">`;
+    } else if(qrCache.pending === false && !qrCache.dataUrl){
+      qrHtml = '<span class="qr-caption">(QR code unavailable — no connection)</span>';
+    } else {
+      // Still in flight: fall back to the live URL. Usually already in
+      // the HTTP cache from the prefetch, so it paints immediately.
+      qrHtml = `<img src="${qrRemoteUrl(item)}" alt="QR code linking to this box">`;
+    }
+    document.getElementById('printLabelArea').innerHTML = buildLabelHtml(item, qrHtml);
+  }
+
+  // Safari on iOS never fires afterprint, so the class would stick and
+  // leave the app blank. Always clear it on a timer as well.
+  function clearPrintingSoon(){
+    setTimeout(()=>document.body.classList.remove('printing'), 1500);
+  }
+
   printLabelBtn.addEventListener('click', ()=>{
     if(!editingId) return;
     const item = items.find(i=>i.id===editingId);
     if(!item) return;
-    // The QR encodes a link back into this same app with ?boxid=<id> —
-    // scanning it filters the shelf down to just this box (see the
-    // highlightId handling in matchesFilters/init below).
-    const deepLink = location.origin + location.pathname + '?boxid=' + encodeURIComponent(item.id);
-    const qrUrl = 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' + encodeURIComponent(deepLink);
-    const printArea = document.getElementById('printLabelArea');
 
-    function buildLabelHtml(qrHtml){
-      return `
-        <div class="print-label">
-          <div class="stamp">#${escapeHtml(item.box || '?')}</div>
-          <div class="contents">${escapeHtml(item.contents || '')}</div>
-          ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
-          ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
-          <div class="qr-row">
-            ${qrHtml}
-            <span class="qr-caption">Scan to open<br>this box in Stockroom</span>
-          </div>
-        </div>
-      `;
+    renderLabel(item);
+
+    // iOS: window.print() is unreliable (a no-op in several versions).
+    // Show the label as its own full-screen sheet instead and let the
+    // user print it from the Share menu.
+    const iOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+                (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    if(iOS){
+      closeModal();
+      document.documentElement.classList.add('labelview');
+      document.body.classList.add('labelview');
+      window.scrollTo(0, 0);
+      return;
     }
 
-    function doPrint(){
-      document.body.classList.add('printing');
+    document.body.classList.add('printing');
+    try {
       window.print();
+    } catch(err){
+      document.body.classList.remove('printing');
+      alert('Printing failed: ' + err.message);
+      return;
     }
-
-    // window.print() would otherwise fire before the browser finishes
-    // fetching the QR image from the external service, printing a blank
-    // box. Load it first and only print once it's actually ready — and
-    // still print (without the QR) if the fetch fails, e.g. offline.
-    const qrImg = new Image();
-    qrImg.onload = () => {
-      printArea.innerHTML = buildLabelHtml(`<img src="${qrUrl}" alt="QR code linking to this box">`);
-      doPrint();
-    };
-    qrImg.onerror = () => {
-      printArea.innerHTML = buildLabelHtml('<span class="qr-caption">(QR code unavailable — no connection)</span>');
-      doPrint();
-    };
-    qrImg.src = qrUrl;
+    clearPrintingSoon();
   });
+
+  document.getElementById('labelViewDone').addEventListener('click', ()=>{
+    document.documentElement.classList.remove('labelview');
+    document.body.classList.remove('labelview');
+  });
+
   window.addEventListener('afterprint', ()=>{
     document.body.classList.remove('printing');
   });
