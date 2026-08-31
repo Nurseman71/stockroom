@@ -1037,8 +1037,22 @@
   // printed on the Mac used to encode localhost:8787/... , which no
   // phone can open. Change this if the app ever moves.
   const LABEL_BASE_URL = 'https://nurseman71.github.io/stockroom/';
+  function labelBaseUrl(){
+    // Prefer the sync server: a phone that scans the label loads the app
+    // straight from the machine that holds the data, which hands it a
+    // token and syncs on its own. The Pages copy has no data until that
+    // browser has been set up by hand, which is what made a scanned
+    // label open an empty shelf.
+    // localhost is excluded on purpose -- printing a localhost label
+    // from the Mac is exactly the bug this replaced.
+    const server = getServerUrl();
+    if(server && !/^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/i.test(server)){
+      return server.replace(/\/+$/, '') + '/';
+    }
+    return LABEL_BASE_URL;
+  }
   function boxDeepLink(item){
-    return LABEL_BASE_URL + '?boxid=' + encodeURIComponent(item.id);
+    return labelBaseUrl() + '?boxid=' + encodeURIComponent(item.id);
   }
   function qrRemoteUrl(item){
     return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' +
@@ -1360,6 +1374,17 @@
   }
 
   // ---------- Init ----------
+  // If the sync server served this page, it injected its own token.
+  // Adopt it so a freshly scanned label works with zero setup -- no
+  // typing a 32-character token on a phone. Existing settings win, so
+  // this never overwrites a browser you configured yourself.
+  const boot = window.__STOCKROOM_BOOTSTRAP__;
+  if(boot && boot.token && !getServerUrl()){
+    localStorage.setItem(LS_SERVER_KEY, location.origin);
+    localStorage.setItem(LS_TOKEN_KEY, boot.token);
+    localStorage.setItem(LS_AUTOSYNC_KEY, '1');
+  }
+
   loadLocal();
   const boxIdParam = new URLSearchParams(location.search).get('boxid');
   if(boxIdParam) highlightId = boxIdParam;

@@ -120,7 +120,9 @@ def get_gemini_api_key():
 
 
 SYNC_TOKEN = get_sync_token()
-GEMINI_API_KEY = get_gemini_api_key()
+# NOTE: the Gemini key is deliberately NOT cached at startup — it's read
+# fresh on every identify request so swapping in a new key only needs the
+# file saved, not a server restart.
 
 
 def load_data():
@@ -209,11 +211,23 @@ def identify_items_in_photo(photo_bytes):
     already safe to show the user on any failure (missing key, network
     issue, Gemini error response, or an empty/blocked result).
     """
-    if not GEMINI_API_KEY:
+    api_key = get_gemini_api_key()
+    if not api_key:
         raise RuntimeError(
-            "No Gemini API key configured on the server. Save one to "
+            "No Gemini API key configured on the server. Create one at "
+            "https://aistudio.google.com/apikey and save it to "
             f"{GEMINI_KEY_FILE.name} next to the server script, or set "
-            "the GEMINI_API_KEY environment variable, then restart."
+            "the GEMINI_API_KEY environment variable."
+        )
+    # Deliberately no prefix check here. AI Studio issues keys in at least
+    # two formats -- the old "AIzaSy..." and the newer "AQ.Ab8..." -- and
+    # Google may add more, so validating the shape only creates false
+    # rejections. Let Google decide whether the key is good; the 401/403
+    # branch below turns its answer into a readable message.
+    if api_key == "PASTE_KEY_HERE" or any(c.isspace() for c in api_key):
+        raise RuntimeError(
+            f"{GEMINI_KEY_FILE.name} doesn't contain a usable key -- it still "
+            "has placeholder text or stray whitespace in it."
         )
 
     request_body = json.dumps({
@@ -225,10 +239,12 @@ def identify_items_in_photo(photo_bytes):
         }]
     }).encode("utf-8")
 
+    # Key goes in the header rather than the query string so it never
+    # lands in URLs, proxy logs, or this server's own access log.
     req = urllib.request.Request(
-        f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
+        GEMINI_API_URL,
         data=request_body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "x-goog-api-key": api_key},
         method="POST",
     )
     try:
@@ -236,6 +252,12 @@ def identify_items_in_photo(photo_bytes):
             response_data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="replace")[:300]
+        if e.code in (401, 403):
+            raise RuntimeError(
+                "Gemini rejected the API key. Create a fresh one at "
+                f"https://aistudio.google.com/apikey and save it to "
+                f"{GEMINI_KEY_FILE.name}. (Details: {detail})"
+            )
         raise RuntimeError(f"Gemini API error ({e.code}): {detail}")
     except urllib.error.URLError as e:
         raise RuntimeError(f"Couldn't reach Gemini API: {e.reason}")
@@ -274,6 +296,36 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _send_index_with_token(self):
+        """Serve index.html with this server's sync token injected.
+
+        Lets a same-origin page self-configure; see the call site for
+        the security trade-off.
+        """
+        if not INDEX_FILE.exists():
+            self.send_error(404, "Not found")
+            return
+        html = INDEX_FILE.read_text(encoding="utf-8")
+        # json.dumps handles the quoting; the token is hex, so there is
+        # nothing here that could close the script tag early.
+        bootstrap = (
+            "<script>window.__STOCKROOM_BOOTSTRAP__ = "
+            + json.dumps({"token": SYNC_TOKEN})
+            + ";</script>"
+        )
+        if "</head>" in html:
+            html = html.replace("</head>", bootstrap + "\n</head>", 1)
+        else:
+            html = bootstrap + html
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        # Never let a proxy or browser cache a response carrying the token.
+        self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -323,10 +375,20 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif path in ("/", "/index.html"):
-            # The app shell itself stays open — only the data API is
-            # gated. That matches how you'll actually use this: load the
-            # page freely, but it needs the token to read or write boxes.
-            self._send_file(INDEX_FILE, "text/html; charset=utf-8")
+            # The app shell itself stays open, and we inject this
+            # server's own sync token into the copy we serve. A browser
+            # that loads the app FROM this server -- e.g. a phone that
+            # just scanned a printed box label -- is then configured
+            # automatically and shows the box, with no trip through
+            # Settings and no token typed on a phone keyboard.
+            #
+            # Trade-off, deliberately accepted: the page is served
+            # without auth, so anyone who can reach this host can now
+            # read and write the inventory. The token still gates other
+            # origins (the GitHub Pages copy), which must be configured
+            # by hand. Since the server binds 0.0.0.0, "reach this host"
+            # means the tailnet AND the local network.
+            self._send_index_with_token()
         else:
             self.send_error(404, "Not found")
 
@@ -415,6 +477,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json(200, merged)
 
     def log_message(self, format, *args):
+        """
+        One line per request goes to stderr, which the LaunchAgent appends
+        to server.err with nothing rotating it. The app polls continuously,
+        so routine successes are pure volume -- server.err reached 6.5MB of
+        almost nothing but "200". Keep anything that isn't a 2xx/3xx.
+
+        NOTE: this must stay the LAST log_message defined in this class --
+        Python keeps the final definition, so a second one added above here
+        is silently dead code.
+        """
+        try:
+            status = int(args[1])
+        except (IndexError, ValueError, TypeError):
+            # log_error() and friends arrive with a different shape of
+            # args -- always keep those.
+            status = 0
+        if 200 <= status < 400:
+            return
         sys.stderr.write("%s - %s\n" % (self.address_string(), format % args))
 
 
