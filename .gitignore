@@ -3,3 +3,10 @@ stockroom_token.txt
 server.log
 server.err
 gemini_api_key.txt
+
+# Python bytecode cache
+__pycache__/
+
+# Uploaded box photos — local data, not source. Keep these backed up
+# somewhere other than git; the repo is public.
+photos/
