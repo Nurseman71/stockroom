@@ -1117,16 +1117,53 @@
       return;
     }
 
-    document.body.classList.add('printing');
-    try {
-      window.print();
-    } catch(err){
-      document.body.classList.remove('printing');
-      alert('Printing failed: ' + err.message);
-      return;
-    }
-    clearPrintingSoon();
+    // Desktop: an <img> is never decoded in the same tick it is added
+    // -- not even a data: URL -- so printing immediately captured an
+    // empty QR box. Desktop browsers allow print() outside the gesture,
+    // so wait for the image, then print. (iOS returned above and needs
+    // no wait: the user taps Share afterwards.)
+    printWhenImageReady();
   });
+
+  function printWhenImageReady(){
+    const img = document.querySelector('#printLabelArea img');
+    let fired = false;
+    const go = ()=>{
+      if(fired) return;
+      fired = true;
+      document.body.classList.add('printing');
+      try {
+        window.print();
+      } catch(err){
+        document.body.classList.remove('printing');
+        alert('Printing failed: ' + err.message);
+        return;
+      }
+      clearPrintingSoon();
+    };
+
+    if(!img){ go(); return; }            // no-QR caption: nothing to wait for
+    if(img.complete && img.naturalWidth){ go(); return; }
+
+    // setTimeout, not requestAnimationFrame: rAF never runs in a
+    // hidden/background tab, which would stall the print.
+    img.addEventListener('load', ()=>setTimeout(go, 0), { once:true });
+    img.addEventListener('error', ()=>{
+      // Swap the broken image for the caption rather than printing a
+      // blank square.
+      const row = img.parentNode;
+      if(row){
+        const note = document.createElement('span');
+        note.className = 'qr-caption';
+        note.textContent = '(QR code unavailable — no connection)';
+        row.replaceChild(note, img);
+      }
+      go();
+    }, { once:true });
+
+    // Never leave the button feeling dead if the image stalls.
+    setTimeout(go, 4000);
+  }
 
   document.getElementById('labelViewDone').addEventListener('click', ()=>{
     document.documentElement.classList.remove('labelview');
