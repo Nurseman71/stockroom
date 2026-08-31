@@ -1032,8 +1032,13 @@
   // cache it as a data URL, and render synchronously inside the click.
   let qrCache = { id:null, dataUrl:null, pending:null };
 
+  // Labels always point at the public GitHub Pages copy, never at
+  // whichever copy the label happened to be printed from. Labels
+  // printed on the Mac used to encode localhost:8787/... , which no
+  // phone can open. Change this if the app ever moves.
+  const LABEL_BASE_URL = 'https://nurseman71.github.io/stockroom/';
   function boxDeepLink(item){
-    return location.origin + location.pathname + '?boxid=' + encodeURIComponent(item.id);
+    return LABEL_BASE_URL + '?boxid=' + encodeURIComponent(item.id);
   }
   function qrRemoteUrl(item){
     return 'https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=' +
