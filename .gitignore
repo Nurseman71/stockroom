@@ -10,3 +10,4 @@ __pycache__/
 # Uploaded box photos — local data, not source. Keep these backed up
 # somewhere other than git; the repo is public.
 photos/
+backup.log
