@@ -192,6 +192,40 @@
 
   /* ---------- Grid ---------- */
   main{ padding:24px 28px calc(60px + env(safe-area-inset-bottom)); }
+
+  /* ---------- Location sections ----------
+     Sorting by box number alone interleaved rooms, so a Garage box sat
+     between two Basement ones. Headings are sticky: on a phone the room
+     name would otherwise scroll away exactly when a long shelf makes it
+     matter most. */
+  .shelf{ display:flex; flex-direction:column; gap:30px; }
+  .loc-group{ display:flex; flex-direction:column; gap:12px; }
+  .loc-heading{
+    position:sticky;
+    top:0;
+    z-index:10;
+    display:flex;
+    align-items:baseline;
+    gap:12px;
+    margin:0;
+    padding:10px 0 8px;
+    background:var(--ink);
+    border-bottom:1px solid var(--line);
+    font-family:'Oswald', sans-serif;
+    font-weight:600;
+    font-size:15px;
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    color:var(--kraft);
+  }
+  .loc-count{
+    font-family:'IBM Plex Mono', monospace;
+    font-weight:400;
+    font-size:11px;
+    letter-spacing:0;
+    text-transform:none;
+    color:var(--muted);
+  }
   .grid{
     display:grid;
     grid-template-columns:repeat(auto-fill, minmax(240px, 1fr));
@@ -234,20 +268,26 @@
   }
 
   .card-body{ padding:12px 14px 14px; display:flex; flex-direction:column; gap:8px; flex:1; }
-  .contents-text{ font-size:14px; line-height:1.4; color:var(--paper); }
-  .location-tag{
-    display:inline-flex;
-    align-items:center;
-    gap:5px;
+  .contents-text{ font-size:14px; line-height:1.45; color:var(--paper); }
+  /* Contents is a NEWLINE-SEPARATED LIST (that is how Identify items
+     writes it and how it is edited), but it used to be dropped into the
+     card through escapeHtml alone, so every newline collapsed into a
+     space and five items read as one run-on phrase. Lines are emitted
+     as <br>-separated entries now; this keeps long entries readable
+     when they wrap. */
+  .contents-text .line{ display:block; }
+  .more-btn{
+    align-self:flex-start;
+    background:transparent;
+    border:0;
+    border-radius:0;
+    padding:2px 0;
     font-family:'IBM Plex Mono', monospace;
-    font-size:11.5px;
-    color:var(--kraft);
-    background:rgba(216,199,161,0.08);
-    border:1px solid rgba(216,199,161,0.25);
-    padding:3px 8px;
-    border-radius:2px;
-    width:fit-content;
+    font-size:11px;
+    color:var(--steel);
+    cursor:pointer;
   }
+  .more-btn:hover{ background:transparent; border-color:transparent; color:var(--paper); }
   .tags-row{ display:flex; flex-wrap:wrap; gap:5px; margin-top:2px; }
   .chip{
     font-family:'IBM Plex Mono', monospace;
@@ -278,6 +318,50 @@
     letter-spacing:0.08em;
     color:var(--kraft-dark);
     margin-bottom:8px;
+  }
+
+  /* ---------- Photo lightbox ----------
+     Cards crop photos to 4:3 with object-fit:cover, and the photo IS
+     the inventory -- the whole reason to open a box's entry is to see
+     what is in it. Sits above the edit modal (z-index 50), the settings
+     backdrop (55/60) and the autocomplete dropdown (70). */
+  .lightbox{
+    position:fixed; inset:0;
+    background:rgba(10,11,14,0.94);
+    display:none;
+    flex-direction:column;
+    align-items:center;
+    justify-content:center;
+    gap:14px;
+    padding:calc(20px + env(safe-area-inset-top)) 16px calc(20px + env(safe-area-inset-bottom));
+    z-index:90;
+    cursor:zoom-out;
+  }
+  .lightbox.open{ display:flex; }
+  .lightbox img{
+    max-width:min(1100px, 94vw);
+    max-height:78vh;
+    object-fit:contain;
+    border:1px solid var(--line);
+    border-radius:3px;
+    background:var(--ink-2);
+    cursor:default;
+  }
+  .lightbox-caption{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--kraft);
+    text-align:center;
+    max-width:94vw;
+  }
+  .lightbox-close{ cursor:pointer; }
+  .card .photo-wrap.has-photo{ cursor:zoom-in; }
+  /* The global focus-visible rule only covers button/.btn/inputs, and
+     this is a div acting as a control -- it needs its own ring or it is
+     invisible to keyboard users. Inset, because the well is clipped. */
+  .card .photo-wrap.has-photo:focus-visible{
+    outline:2px solid var(--steel);
+    outline-offset:-2px;
   }
 
   /* ---------- Modal ---------- */
@@ -328,6 +412,16 @@
     font-size:16px;
   }
   .field textarea{ resize:vertical; min-height:140px; max-height:400px; }
+  /* Advisory only -- never blocks a save. Box numbers are physical
+     labels and the user is the authority on what is stuck to the bin. */
+  .field-note{
+    margin-top:6px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    line-height:1.45;
+    color:var(--muted);
+  }
+  .field-note.warn{ color:var(--stamp); }
 
   /* ---------- Custom autocomplete (native <datalist> flickers inside
      modals in Safari, so this replaces it) ---------- */
@@ -424,7 +518,11 @@
     padding:2px 10px;
     margin-bottom:8px;
   }
+  /* Same newline collapse as the card had -- worse here, because this
+     is the label you read while standing in front of the box. Never
+     clamped: a label showing "+4 more" would be useless. */
   .print-label .contents{ font-size:13px; margin-bottom:6px; line-height:1.4; }
+  .print-label .contents .line{ display:block; }
   .print-label .location{ font-family:'IBM Plex Mono', monospace; font-size:11px; margin-bottom:6px; }
   .print-label .tags{ font-family:'IBM Plex Mono', monospace; font-size:10px; color:#444; margin-bottom:10px; }
   .print-label .qr-row{ display:flex; align-items:center; gap:10px; }
@@ -500,6 +598,7 @@
     .tag-chip-btn{ padding:13px 16px; }
     .suggestion-item{ padding:13px 14px; }
     .card-actions button{ padding:13px 8px; }
+    .more-btn{ padding:9px 0; } /* tappable, but it is inline text -- not a full 44pt block */
     .chip{ padding:6px 10px; } /* display-only, not tappable — modest bump for legibility, not a full target */
   }
 </style>
@@ -539,12 +638,19 @@
 </div>
 
 <main>
-  <div class="grid" id="grid"></div>
+  <div class="shelf" id="grid"></div>
   <div class="empty-state" id="emptyState" style="display:none;">
     <div class="stencil">Empty shelf</div>
     <div>No boxes match — add one, or clear your search.</div>
   </div>
 </main>
+
+<!-- Photo lightbox -->
+<div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Box photo">
+  <img id="lightboxImg" alt="">
+  <div class="lightbox-caption" id="lightboxCaption"></div>
+  <button type="button" class="lightbox-close" id="lightboxClose">Close</button>
+</div>
 
 <!-- Add/Edit Modal -->
 <div class="modal-overlay" id="modalOverlay">
@@ -553,6 +659,7 @@
     <div class="field">
       <label for="fBox">Box #</label>
       <input type="text" id="fBox" placeholder="e.g. 12, GARAGE-04">
+      <div class="field-note" id="boxNote"></div>
     </div>
     <div class="field">
       <label for="fContents">Contents</label>
@@ -770,6 +877,46 @@
     });
   }
 
+  // One place that turns the stored contents string into display lines,
+  // so the card and the printed label can never disagree about it.
+  const CONTENTS_CLAMP = 4;
+  const UNFILED = 'Unfiled';
+
+  // "Attic" and "attic" are the same shelf. Grouping on the raw string
+  // made them two sections -- and since headings are uppercased in CSS,
+  // BOTH rendered as "ATTIC", so the duplicate was invisible: the same
+  // room twice with no way to tell why. Everything keys off the
+  // normalised form now; only the label shown to the reader varies.
+  function locationKey(loc){
+    return String(loc || '').trim().replace(/\s+/g, ' ').toLowerCase();
+  }
+
+  // key -> {label, updatedAt}. The label is the casing used by the most
+  // recently updated box in that room, so correcting the spelling once
+  // re-labels the whole section.
+  function canonicalLocations(){
+    const best = new Map();
+    items.forEach(it => {
+      if(it.deleted) return;
+      const raw = String(it.location || '').trim().replace(/\s+/g, ' ');
+      if(!raw) return;
+      const key = raw.toLowerCase();
+      const prev = best.get(key);
+      const stamp = String(it.updatedAt || '');
+      if(!prev || stamp >= prev.updatedAt) best.set(key, {label: raw, updatedAt: stamp});
+    });
+    return best;
+  }
+  function contentLines(item){
+    return String((item && item.contents) || '')
+      .split('\n')
+      .map(l => l.trim())
+      .filter(Boolean);
+  }
+  function renderLines(lines){
+    return lines.map(l => `<span class="line">${escapeHtml(l)}</span>`).join('');
+  }
+
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
@@ -798,9 +945,8 @@
     renderTagChips();
     highlightBanner.classList.toggle('show', !!highlightId);
     const q = searchInput.value.trim().toLowerCase();
-    const filtered = items
-      .filter(it => matchesFilters(it, q))
-      .sort((a,b) => (a.box||'').localeCompare(b.box||'', undefined, {numeric:true}));
+    // Sorted per location group now, not globally -- see renderGroups.
+    const filtered = items.filter(it => matchesFilters(it, q));
 
     countPill.textContent = `${filtered.length} box${filtered.length===1?'':'es'}`;
     grid.innerHTML = '';
@@ -811,31 +957,142 @@
     }
     emptyState.style.display = 'none';
 
+    // Group by normalised location. A box with no location falls into
+    // the empty key and gets one shared UNFILED heading rather than its
+    // own blank one -- sorted last, so an unlabelled box stays visible
+    // without pushing real rooms down.
+    const labels = canonicalLocations();
+    const labelFor = key => key === '' ? UNFILED : ((labels.get(key) || {}).label || key);
+    const groups = new Map();
     filtered.forEach(item => {
-      const card = document.createElement('div');
-      card.className = 'card';
-      const src = photoSrc(item);
-      card.innerHTML = `
-        <div class="photo-wrap">
+      const key = locationKey(item.location);
+      if(!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(item);
+    });
+    const sortedLocations = [...groups.keys()].sort((a, b) => {
+      if(a === '') return 1;
+      if(b === '') return -1;
+      return labelFor(a).localeCompare(labelFor(b), undefined, {sensitivity:'base'});
+    });
+
+    renderGroups(groups, sortedLocations, labelFor);
+    wireGrid();
+  }
+
+  function renderGroups(groups, sortedLocations, labelFor){
+    grid.innerHTML = sortedLocations.map(key => {
+      const boxes = groups.get(key)
+        .sort((a, b) => (a.box || '').localeCompare(b.box || '', undefined, {numeric:true}));
+      return `
+        <section class="loc-group">
+          <h2 class="loc-heading">${escapeHtml(labelFor(key))}<span class="loc-count">${boxes.length} box${boxes.length === 1 ? '' : 'es'}</span></h2>
+          <div class="grid">${boxes.map(cardHtml).join('')}</div>
+        </section>`;
+    }).join('');
+  }
+
+  function cardHtml(item){
+    const src = photoSrc(item);
+    // Clamp by LOGICAL lines, not rendered ones: the count in
+    // "+N more" then refers to whole items the reader can't see,
+    // which is the thing they actually want to know. A CSS
+    // line-clamp would cut mid-item and make the number a lie.
+    const lines = contentLines(item);
+    const hiddenCount = Math.max(0, lines.length - CONTENTS_CLAMP);
+    // The photo well opens the lightbox, so it is a control, not
+    // decoration: it carries a role, a tab stop and a label, or it is
+    // simply unreachable without a mouse.
+    return `<div class="card">
+        <div class="photo-wrap${src ? ' has-photo' : ''}"${src ? ` data-photo="${item.id}" role="button" tabindex="0" aria-label="View photo of box ${escapeHtml(item.box || '?')}"` : ''}>
           ${src ? `<img src="${src}" alt="Box ${escapeHtml(item.box)} contents" loading="lazy">` : `<span class="no-photo">no photo</span>`}
           <div class="stamp-num">#${escapeHtml(item.box || '?')}</div>
         </div>
         <div class="card-body">
-          <div class="contents-text">${escapeHtml(item.contents || '')}</div>
-          ${item.location ? `<span class="location-tag">📍 ${escapeHtml(item.location)}</span>` : ''}
+          <div class="contents-text" data-contents="${item.id}">${renderLines(lines.slice(0, hiddenCount ? CONTENTS_CLAMP : lines.length))}</div>
+          ${hiddenCount ? `<button type="button" class="more-btn" data-more="${item.id}">+${hiddenCount} more</button>` : ''}
+          <!-- The location lived here as a chip until cards were grouped
+               under sticky location headings. It is now redundant, and
+               actively misleading: two boxes typed "attic" and "Attic"
+               sit under one ATTIC heading while their chips disagreed. -->
           ${(item.tags && item.tags.length) ? `<div class="tags-row">${item.tags.map(t=>`<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
           <div class="card-actions">
             <button data-edit="${item.id}">Edit</button>
           </div>
         </div>
-      `;
-      grid.appendChild(card);
-    });
+      </div>`;
+  }
 
+  function wireGrid(){
     grid.querySelectorAll('[data-edit]').forEach(btn=>{
       btn.addEventListener('click', ()=> openModal(btn.dataset.edit));
     });
+    grid.querySelectorAll('[data-photo]').forEach(wrap=>{
+      wrap.addEventListener('click', ()=> openLightbox(wrap.dataset.photo));
+      wrap.addEventListener('keydown', (e)=>{
+        if(e.key === 'Enter' || e.key === ' '){
+          e.preventDefault();   // Space would otherwise scroll the page
+          openLightbox(wrap.dataset.photo);
+        }
+      });
+    });
+    grid.querySelectorAll('[data-more]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        const id = btn.dataset.more;
+        const item = items.find(i => i.id === id);
+        const el = grid.querySelector(`[data-contents="${id}"]`);
+        if(!item || !el) return;
+        const all = contentLines(item);
+        const expanded = btn.dataset.expanded === '1';
+        el.innerHTML = renderLines(expanded ? all.slice(0, CONTENTS_CLAMP) : all);
+        btn.textContent = expanded ? `+${all.length - CONTENTS_CLAMP} more` : 'Show less';
+        btn.dataset.expanded = expanded ? '0' : '1';
+      });
+    });
   }
+
+  // ---------- Photo lightbox ----------
+  const lightbox = document.getElementById('lightbox');
+  const lightboxImg = document.getElementById('lightboxImg');
+  const lightboxCaption = document.getElementById('lightboxCaption');
+  const lightboxClose = document.getElementById('lightboxClose');
+  let lightboxReturnFocus = null;
+
+  function openLightbox(id, srcOverride){
+    const item = items.find(i => i.id === id);
+    const src = srcOverride || photoSrc(item);
+    if(!src) return;
+    lightboxImg.src = src;
+    lightboxImg.alt = item ? `Box ${item.box} contents` : 'Box photo';
+    lightboxCaption.textContent = item
+      ? ['#' + (item.box || '?'), item.location].filter(Boolean).join('  ·  ')
+      : '';
+    // Remember where focus came from BEFORE moving it, so closing can
+    // put the keyboard back on the card that was opened rather than
+    // dumping the user at the top of the document.
+    lightboxReturnFocus = document.activeElement;
+    lightbox.classList.add('open');
+    lightboxClose.focus();
+  }
+  function closeLightbox(){
+    lightbox.classList.remove('open');
+    // Drop the reference so a large data URL isn't pinned in the DOM.
+    lightboxImg.removeAttribute('src');
+    // The card may have been re-rendered while the lightbox was open,
+    // in which case the remembered element is detached and focusing it
+    // would silently do nothing -- check before using it.
+    if(lightboxReturnFocus && document.contains(lightboxReturnFocus)){
+      lightboxReturnFocus.focus();
+    }
+    lightboxReturnFocus = null;
+  }
+  lightbox.addEventListener('keydown', (e)=>{
+    // Close is the only focusable element in here, so Tab has nowhere
+    // legitimate to go -- without this it walks the page behind the
+    // overlay, which is the classic aria-modal lie.
+    if(e.key === 'Tab'){ e.preventDefault(); lightboxClose.focus(); }
+  });
+  // Clicking the backdrop closes; clicking the photo itself does not.
+  lightbox.addEventListener('click', (e)=>{ if(e.target !== lightboxImg) closeLightbox(); });
 
   // ---------- Modal ----------
   const modalOverlay = document.getElementById('modalOverlay');
@@ -854,6 +1111,45 @@
   let pendingPhotoData = null;
   let allLocations = [];
 
+  const boxNote = document.getElementById('boxNote');
+
+  function boxKey(v){ return String(v || '').trim().toLowerCase(); }
+
+  function locationLabel(key){
+    if(!key) return UNFILED;
+    const found = canonicalLocations().get(key);
+    return found ? found.label : key;
+  }
+
+  // Two tiers, deliberately. The same number in the SAME room means two
+  // physical labels you cannot tell apart -- that is always a mistake.
+  // The same number in a DIFFERENT room is normal if rooms are numbered
+  // independently (this collection already had a Garage 1 and a
+  // Basement 1), so it is stated, not flagged. Neither blocks saving.
+  function updateBoxNote(){
+    boxNote.className = 'field-note';
+    boxNote.textContent = '';
+    const key = boxKey(fBox.value);
+    if(!key) return;
+    const here = locationKey(fLocation.value);
+    const clashes = items.filter(i =>
+      !i.deleted && i.id !== editingId && boxKey(i.box) === key);
+    if(!clashes.length) return;
+
+    const sameRoom = clashes.filter(i => locationKey(i.location) === here);
+    if(sameRoom.length){
+      boxNote.className = 'field-note warn';
+      boxNote.textContent =
+        `Box ${fBox.value.trim()} already exists in ${locationLabel(here)} — two labels the same.`;
+      return;
+    }
+    const rooms = [...new Set(clashes.map(i => locationLabel(locationKey(i.location))))];
+    boxNote.textContent = `Also used in ${rooms.join(', ')}.`;
+  }
+
+  fBox.addEventListener('input', updateBoxNote);
+  fLocation.addEventListener('input', updateBoxNote);
+
   function updateIdentifyBtnVisibility(){
     const hasPhoto = !!pendingPhotoData || photoPreview.style.display === 'block';
     identifyPhotoBtn.style.display = hasPhoto ? 'inline-block' : 'none';
@@ -861,9 +1157,11 @@
   }
 
   function refreshLocationList(){
-    const locs = new Set();
-    items.forEach(it => { if(!it.deleted && it.location) locs.add(it.location); });
-    allLocations = [...locs].sort();
+    // Deduplicated the same way the headings are, so the dropdown can't
+    // keep re-seeding the "attic"/"Attic" split it is meant to prevent.
+    allLocations = [...canonicalLocations().values()]
+      .map(v => v.label)
+      .sort((a, b) => a.localeCompare(b, undefined, {sensitivity:'base'}));
   }
 
   function showLocationSuggestions(){
@@ -883,6 +1181,7 @@
         e.preventDefault();
         fLocation.value = el.dataset.loc;
         locationSuggestions.classList.remove('show');
+        updateBoxNote();
       });
     });
   }
@@ -935,6 +1234,7 @@
       printLabelBtn.style.display = 'none';
     }
     updateIdentifyBtnVisibility();
+    updateBoxNote();
     modalOverlay.classList.add('open');
     autoResizeContents();
     fBox.focus();
@@ -948,7 +1248,24 @@
   document.getElementById('addBtn').addEventListener('click', ()=>openModal(null));
   document.getElementById('cancelBtn').addEventListener('click', closeModal);
   modalOverlay.addEventListener('click', (e)=>{ if(e.target === modalOverlay) closeModal(); });
-  document.addEventListener('keydown', (e)=>{ if(e.key === 'Escape'){ closeModal(); closeSettings(); }});
+  document.addEventListener('keydown', (e)=>{
+    if(e.key !== 'Escape') return;
+    // The lightbox sits above everything else, so Escape dismisses it
+    // ALONE -- otherwise one keypress would also close the edit modal
+    // sitting underneath, losing whatever was being typed.
+    if(lightbox.classList.contains('open')){ closeLightbox(); return; }
+    closeModal();
+    closeSettings();
+  });
+
+  // The edit modal's preview is 64x48 -- too small to check a photo
+  // against a box. Tapping it opens the same lightbox, including for a
+  // photo just picked and not yet saved.
+  photoPreview.style.cursor = 'zoom-in';
+  photoPreview.addEventListener('click', ()=>{
+    if(photoPreview.style.display !== 'block' || !photoPreview.src) return;
+    openLightbox(editingId, photoPreview.src);
+  });
 
   fPhoto.addEventListener('change', ()=>{
     const file = fPhoto.files[0];
@@ -1176,7 +1493,7 @@
     return `
       <div class="print-label">
         <div class="stamp">#${escapeHtml(item.box || '?')}</div>
-        <div class="contents">${escapeHtml(item.contents || '')}</div>
+        <div class="contents">${renderLines(contentLines(item))}</div>
         ${item.location ? `<div class="location">${escapeHtml(item.location)}</div>` : ''}
         ${(item.tags && item.tags.length) ? `<div class="tags">${item.tags.map(escapeHtml).join(' · ')}</div>` : ''}
         <div class="qr-row">
