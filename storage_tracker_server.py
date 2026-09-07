@@ -83,7 +83,15 @@ DATA_FILE = BASE_DIR / "stockroom_data.json"
 INDEX_FILE = BASE_DIR / "index.html"
 TOKEN_FILE = BASE_DIR / "stockroom_token.txt"
 PHOTOS_DIR = BASE_DIR / "photos"
+ICONS_DIR = BASE_DIR / "icons"
+ICON_CONTENT_TYPES = {
+    ".png": "image/png",
+    ".ico": "image/x-icon",
+    ".svg": "image/svg+xml",
+    ".webp": "image/webp",
+}
 GEMINI_KEY_FILE = BASE_DIR / "gemini_api_key.txt"
+GIT_DIR = BASE_DIR / ".git"
 TOMBSTONE_MAX_AGE_DAYS = 30
 
 # Google renames/retires Gemini model IDs often (multiple times in 2026
@@ -147,6 +155,69 @@ SYNC_TOKEN = get_sync_token()
 # NOTE: the Gemini key is deliberately NOT cached at startup — it's read
 # fresh on every identify request so swapping in a new key only needs the
 # file saved, not a server restart.
+
+
+def get_git_short_sha():
+    """
+    Read the checked-out commit straight from .git -- no subprocess, no
+    git dependency. This server is stdlib-only on purpose and runs under
+    launchd's minimal environment, where git may not be on PATH.
+
+    Handles all three shapes HEAD can take: a symbolic ref to a loose
+    ref file, a symbolic ref whose target lives in packed-refs, and a
+    detached HEAD (where HEAD *is* the sha).
+    """
+    try:
+        head = (GIT_DIR / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not head.startswith("ref:"):
+        return head[:7] or None
+    ref = head.partition("ref:")[2].strip()
+    try:
+        return (GIT_DIR / ref).read_text(encoding="utf-8").strip()[:7]
+    except OSError:
+        pass
+    try:
+        for line in (GIT_DIR / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref:
+                return sha[:7]
+    except OSError:
+        pass
+    return None
+
+
+def get_build_stamp():
+    """
+    Identify WHICH copy of the app the browser is looking at.
+
+    Two copies of index.html are live at once -- this server and the
+    GitHub Pages deploy -- and they drift. Telling them apart has cost
+    real debugging time more than once (a fix verified on the Mac while
+    the phone still ran the old deployed code).
+
+    Only this server injects the stamp, so a page WITHOUT one is the
+    Pages copy. The absence is as informative as the value.
+
+    Computed per request rather than cached at startup, because
+    index.html is edited live and re-read per request -- caching would
+    make the stamp lie exactly when it matters. The sha is the last
+    COMMIT; the index.html mtime is what catches uncommitted edits on
+    top of it.
+    """
+    parts = []
+    sha = get_git_short_sha()
+    if sha:
+        parts.append(sha)
+    try:
+        mtime = datetime.fromtimestamp(INDEX_FILE.stat().st_mtime)
+        parts.append("index.html " + mtime.strftime("%Y-%m-%d %H:%M"))
+    except OSError:
+        pass
+    return " \u00b7 ".join(parts) if parts else "unknown"
 
 
 def load_data():
@@ -226,6 +297,42 @@ def photo_path_for_id(item_id):
     if not item_id or "/" in item_id or "\\" in item_id or item_id in (".", ".."):
         return None
     return PHOTOS_DIR / f"{item_id}.jpg"
+
+
+def icon_path_for(name):
+    """
+    Resolve an /icons/<name> request to a real file, or None.
+
+    do_GET used to handle only /, /index.html, /photos/ and /api/*, so
+    every icons/ request 404'd. That went unnoticed because the GitHub
+    Pages copy serves them fine -- but a phone loading the app from THIS
+    server (which is where printed labels now point) got no icon, and
+    Add to Home Screen silently fell back to Safari's page snapshot.
+
+    Icons are the one thing served without a token, deliberately: Safari
+    fetches apple-touch-icon and favicon with no app context, so gating
+    them would leave the very bug this fixes. They are generic app
+    chrome, not user data.
+
+    Defence in depth, same posture as photo_path_for_id: reject any name
+    carrying a separator or parent reference, allow only known image
+    suffixes, then re-check that the RESOLVED path is still inside
+    ICONS_DIR -- so neither a crafted name nor a symlink placed in
+    icons/ can be used to read a file elsewhere on disk.
+    """
+    if not name or "/" in name or "\\" in name or name in (".", ".."):
+        return None
+    suffix = Path(name).suffix.lower()
+    if suffix not in ICON_CONTENT_TYPES:
+        return None
+    candidate = (ICONS_DIR / name).resolve()
+    try:
+        candidate.relative_to(ICONS_DIR.resolve())
+    except ValueError:
+        return None
+    if not candidate.is_file():
+        return None
+    return candidate
 
 
 def identify_items_in_photo(photo_bytes):
@@ -333,18 +440,24 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404, "Not found")
             return
         html = INDEX_FILE.read_text(encoding="utf-8")
+        # The build stamp goes to EVERY client -- it identifies which copy
+        # of the app this is and reveals nothing (the repo is public).
+        # The token stays gated on is_trusted_client.
+        payload = {"build": get_build_stamp()}
         if is_trusted_client(self.client_address[0]):
-            # json.dumps handles the quoting; the token is hex, so there
-            # is nothing here that could close the script tag early.
-            bootstrap = (
-                "<script>window.__STOCKROOM_BOOTSTRAP__ = "
-                + json.dumps({"token": SYNC_TOKEN})
-                + ";</script>"
-            )
-            if "</head>" in html:
-                html = html.replace("</head>", bootstrap + "\n</head>", 1)
-            else:
-                html = bootstrap + html
+            payload["token"] = SYNC_TOKEN
+        # json.dumps handles the quoting; the token is hex and the stamp
+        # is a sha plus a formatted date, so there is nothing here that
+        # could close the script tag early.
+        bootstrap = (
+            "<script>window.__STOCKROOM_BOOTSTRAP__ = "
+            + json.dumps(payload)
+            + ";</script>"
+        )
+        if "</head>" in html:
+            html = html.replace("</head>", bootstrap + "\n</head>", 1)
+        else:
+            html = bootstrap + html
         body = html.encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -353,6 +466,42 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    # Content-Length is attacker-controlled and rfile.read() will happily
+    # allocate whatever it is told to. Photos arrive as base64 data URLs
+    # (~33% larger than the raw JPEG) and the client compresses to 900px
+    # at q0.62, so a few hundred KB is typical -- 10MB is generous
+    # headroom, not a tight fit. Metadata syncs are far smaller.
+    MAX_BODY_BYTES = 10 * 1024 * 1024
+
+    def _read_body(self):
+        """
+        Read a request body, or respond with an error and return None.
+
+        Callers MUST treat None as "a response has already been sent,
+        stop here". On the error paths the body is deliberately never
+        read: protocol_version is left at HTTP/1.0, so the connection
+        closes after the response and there is no keep-alive stream left
+        to desynchronise.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except (TypeError, ValueError):
+            # Previously this raised ValueError straight out of do_POST,
+            # dropping the connection with a traceback in server.err.
+            self._send_json(400, {"error": "invalid Content-Length"})
+            return None
+        if length < 0:
+            self._send_json(400, {"error": "invalid Content-Length"})
+            return None
+        if length > self.MAX_BODY_BYTES:
+            # 413 rather than 400 so a client can distinguish "too big"
+            # from "malformed" without parsing the message.
+            self._send_json(413, {
+                "error": f"request body too large (limit {self.MAX_BODY_BYTES} bytes)"
+            })
+            return None
+        return self.rfile.read(length) if length else b"{}"
 
     def _send_file(self, path, content_type):
         if not path.exists():
@@ -396,9 +545,23 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Access-Control-Allow-Origin", "*")
-            self.send_header("Cache-Control", "public, max-age=86400")
+            # `private`, not `public`: this response is gated on a sync
+            # token, and `public` explicitly licenses shared caches to
+            # store an authenticated response. The long max-age is still
+            # correct -- photoSrc() in index.html cache-busts these URLs
+            # with the item's updatedAt, so a replaced photo arrives at a
+            # NEW url rather than waiting out the TTL.
+            self.send_header("Cache-Control", "private, max-age=86400")
             self.end_headers()
             self.wfile.write(body)
+        elif path.startswith("/icons/"):
+            icon_path = icon_path_for(path[len("/icons/"):])
+            if icon_path is None:
+                self.send_error(404, "Not found")
+                return
+            # _send_file has existed unused since this server was written;
+            # this is its first caller.
+            self._send_file(icon_path, ICON_CONTENT_TYPES[icon_path.suffix.lower()])
         elif path in ("/", "/index.html"):
             # The app shell itself stays open, and we inject this
             # server's own sync token into the copy we serve. A browser
@@ -423,8 +586,9 @@ class Handler(BaseHTTPRequestHandler):
             if not self._token_ok(token):
                 self._send_json(401, {"error": "Invalid or missing token"})
                 return
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_body()
+            if raw is None:
+                return
             try:
                 payload = json.loads(raw or b"{}")
             except json.JSONDecodeError:
@@ -454,8 +618,9 @@ class Handler(BaseHTTPRequestHandler):
             if photo_path is None:
                 self._send_json(400, {"error": "invalid id"})
                 return
-            length = int(self.headers.get("Content-Length", 0))
-            raw = self.rfile.read(length) if length else b"{}"
+            raw = self._read_body()
+            if raw is None:
+                return
             try:
                 payload = json.loads(raw or b"{}")
             except json.JSONDecodeError:
@@ -483,8 +648,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._token_ok(token):
             self._send_json(401, {"error": "Invalid or missing token"})
             return
-        length = int(self.headers.get("Content-Length", 0))
-        raw = self.rfile.read(length) if length else b"{}"
+        raw = self._read_body()
+        if raw is None:
+            return
         try:
             incoming = json.loads(raw or b"{}")
         except json.JSONDecodeError:

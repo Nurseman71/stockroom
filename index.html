@@ -619,6 +619,8 @@
   <button id="exportBtn" style="width:100%; margin-bottom:8px;">Export JSON</button>
   <button id="importBtnTrigger" style="width:100%;">Import JSON</button>
   <input type="file" id="importFile" accept="application/json" style="display:none;">
+  <hr style="border:none; border-top:1px solid var(--line); margin:20px 0;">
+  <p id="buildStamp" style="font-family:'IBM Plex Mono', monospace; font-size:11px; line-height:1.5; color:var(--muted); word-break:break-word; white-space:pre-line; margin:0;"></p>
 </div>
 
 <script>
@@ -1479,6 +1481,16 @@
   // typing a 32-character token on a phone. Existing settings win, so
   // this never overwrites a browser you configured yourself.
   const boot = window.__STOCKROOM_BOOTSTRAP__;
+
+  // Which of the two live copies is this? Only the sync server injects
+  // a bootstrap, so no bootstrap == the GitHub Pages deploy. Checking
+  // this used to mean reading the address bar and guessing; more than
+  // one debugging session was spent on a phone running old deployed
+  // code while the fix sat verified on the Mac.
+  document.getElementById('buildStamp').textContent = (boot && boot.build)
+    ? 'Served by the sync server\n' + boot.build
+    : 'GitHub Pages copy — not served by the sync server';
+
   if(boot && boot.token && !getServerUrl()){
     localStorage.setItem(LS_SERVER_KEY, location.origin);
     localStorage.setItem(LS_TOKEN_KEY, boot.token);
