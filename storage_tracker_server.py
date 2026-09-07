@@ -503,7 +503,7 @@ class Handler(BaseHTTPRequestHandler):
             return None
         return self.rfile.read(length) if length else b"{}"
 
-    def _send_file(self, path, content_type):
+    def _send_file(self, path, content_type, cache_control=None):
         if not path.exists():
             self.send_error(404, "Not found")
             return
@@ -511,6 +511,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
         self.end_headers()
         self.wfile.write(body)
 
@@ -562,6 +564,13 @@ class Handler(BaseHTTPRequestHandler):
             # _send_file has existed unused since this server was written;
             # this is its first caller.
             self._send_file(icon_path, ICON_CONTENT_TYPES[icon_path.suffix.lower()])
+        elif path == "/sw.js":
+            # no-store: a stale service worker is the hardest kind of
+            # stale copy to clear, and this app has already paid for
+            # stale copies once (see the two-live-copies problem).
+            self._send_file(BASE_DIR / "sw.js", "text/javascript; charset=utf-8", "no-store")
+        elif path == "/manifest.webmanifest":
+            self._send_file(BASE_DIR / "manifest.webmanifest", "application/manifest+json; charset=utf-8")
         elif path in ("/", "/index.html"):
             # The app shell itself stays open, and we inject this
             # server's own sync token into the copy we serve. A browser
