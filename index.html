@@ -191,6 +191,36 @@
   }
   .storage-banner button{ flex:none; }
 
+  /* ---------- Selection bar ---------- */
+  .select-bar{
+    display:none;
+    align-items:center;
+    flex-wrap:wrap;
+    gap:12px;
+    padding:12px 28px;
+    background:rgba(92,130,166,0.10);
+    border-bottom:1px solid var(--steel-dim);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--paper);
+  }
+  .select-bar.show{ display:flex; }
+  .select-bar .spacer{ flex:1; }
+  .card.selected{ border-color:var(--steel); }
+  .select-box{
+    display:flex;
+    align-items:center;
+    gap:7px;
+    flex:1;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    color:var(--muted);
+    cursor:pointer;
+    user-select:none;
+  }
+  .select-box input{ width:17px; height:17px; accent-color:var(--steel); cursor:pointer; }
+  .card.selected .select-box{ color:var(--paper); }
+
   /* ---------- Grid ---------- */
   main{ padding:24px 28px calc(60px + env(safe-area-inset-bottom)); }
 
@@ -656,7 +686,15 @@
   <input type="text" id="searchInput" placeholder="Search contents, box #, location, tags…">
   <div class="tag-chips" id="tagChips"></div>
   <span class="count-pill" id="countPill">0 boxes</span>
+  <button id="selectModeBtn" title="Pick individual boxes to print">Select</button>
   <button id="printSheetBtn" title="Print a label for every box currently shown">Print labels</button>
+</div>
+
+<div class="select-bar" id="selectBar">
+  <span id="selectCount">0 selected</span>
+  <span class="spacer"></span>
+  <button id="selectAllShownBtn">Select all shown</button>
+  <button id="clearSelectionBtn">Clear</button>
 </div>
 
 <main>
@@ -778,6 +816,12 @@
   // for the life of the tab so they can still upload on the next sync,
   // instead of being lost along with the box that owned them.
   const pendingUploads = new Map();
+  // Selection for printing. Held as ids rather than as a filtered list
+  // ON PURPOSE: it has to survive changing the search or tag filters,
+  // so boxes from three different rooms can be gathered into one print
+  // run. Deliberately not persisted -- it is a task, not a setting.
+  let selectMode = false;
+  const selectedIds = new Set();
 
   const grid = document.getElementById('grid');
   const emptyState = document.getElementById('emptyState');
@@ -982,10 +1026,14 @@
     // Naming the count makes the scope self-evident: the filters you can
     // see ARE the selection.
     const sheetBtn = document.getElementById('printSheetBtn');
-    sheetBtn.textContent = filtered.length === 0 ? 'Print labels'
-      : filtered.length === 1 ? 'Print label'
-      : `Print ${filtered.length} labels`;
-    sheetBtn.disabled = filtered.length === 0;
+    if(selectMode){
+      refreshSelectionUi();
+    } else {
+      sheetBtn.textContent = filtered.length === 0 ? 'Print labels'
+        : filtered.length === 1 ? 'Print label'
+        : `Print ${filtered.length} labels`;
+      sheetBtn.disabled = filtered.length === 0;
+    }
     grid.innerHTML = '';
 
     if(filtered.length === 0){
@@ -1039,7 +1087,7 @@
     // The photo well opens the lightbox, so it is a control, not
     // decoration: it carries a role, a tab stop and a label, or it is
     // simply unreachable without a mouse.
-    return `<div class="card">
+    return `<div class="card${selectMode && selectedIds.has(item.id) ? ' selected' : ''}">
         <div class="photo-wrap${src ? ' has-photo' : ''}"${src ? ` data-photo="${item.id}" role="button" tabindex="0" aria-label="View photo of box ${escapeHtml(item.box || '?')}"` : ''}>
           ${src ? `<img src="${src}" alt="Box ${escapeHtml(item.box)} contents" loading="lazy">` : `<span class="no-photo">no photo</span>`}
           <div class="stamp-num">#${escapeHtml(item.box || '?')}</div>
@@ -1053,6 +1101,7 @@
                sit under one ATTIC heading while their chips disagreed. -->
           ${(item.tags && item.tags.length) ? `<div class="tags-row">${item.tags.map(t=>`<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>` : ''}
           <div class="card-actions">
+            ${selectMode ? `<label class="select-box"><input type="checkbox" data-select="${item.id}"${selectedIds.has(item.id) ? ' checked' : ''}> Select</label>` : ''}
             <button data-edit="${item.id}">Edit</button>
           </div>
         </div>
@@ -1070,6 +1119,16 @@
           e.preventDefault();   // Space would otherwise scroll the page
           openLightbox(wrap.dataset.photo);
         }
+      });
+    });
+    grid.querySelectorAll('[data-select]').forEach(box=>{
+      box.addEventListener('change', ()=>{
+        const id = box.dataset.select;
+        if(box.checked) selectedIds.add(id); else selectedIds.delete(id);
+        // Updated in place rather than re-rendering: a full render would
+        // reset the scroll position mid-way through ticking a long shelf.
+        box.closest('.card').classList.toggle('selected', box.checked);
+        refreshSelectionUi();
       });
     });
     grid.querySelectorAll('[data-more]').forEach(btn=>{
@@ -1616,26 +1675,79 @@
       `<div class="label-sheet">${list.map(it => buildLabelHtml(it, labelQrHtml(it))).join('')}</div>`;
   }
 
-  function boxesCurrentlyShown(){
-    const q = searchInput.value.trim().toLowerCase();
+  function sortShelfOrder(list){
     const labels = canonicalLocations();
     const labelFor = key => key === '' ? UNFILED : ((labels.get(key) || {}).label || key);
-    return items
-      .filter(it => matchesFilters(it, q))
-      .sort((a, b) => {
-        const la = labelFor(locationKey(a.location));
-        const lb = labelFor(locationKey(b.location));
-        if(la === UNFILED && lb !== UNFILED) return 1;
-        if(lb === UNFILED && la !== UNFILED) return -1;
-        return la.localeCompare(lb, undefined, {sensitivity:'base'})
-            || (a.box || '').localeCompare(b.box || '', undefined, {numeric:true});
-      });
+    return list.slice().sort((a, b) => {
+      const la = labelFor(locationKey(a.location));
+      const lb = labelFor(locationKey(b.location));
+      if(la === UNFILED && lb !== UNFILED) return 1;
+      if(lb === UNFILED && la !== UNFILED) return -1;
+      return la.localeCompare(lb, undefined, {sensitivity:'base'})
+          || (a.box || '').localeCompare(b.box || '', undefined, {numeric:true});
+    });
   }
 
+  function boxesCurrentlyShown(){
+    const q = searchInput.value.trim().toLowerCase();
+    return sortShelfOrder(items.filter(it => matchesFilters(it, q)));
+  }
+
+  // In select mode the picked set wins, drawn from ALL live boxes rather
+  // than from the filtered view -- otherwise changing the filter would
+  // silently drop boxes already ticked, which is the whole reason the
+  // selection is held as ids.
+  function boxesToPrint(){
+    if(!selectMode) return boxesCurrentlyShown();
+    return sortShelfOrder(items.filter(it => !it.deleted && selectedIds.has(it.id)));
+  }
+
+  const selectBar = document.getElementById('selectBar');
+  const selectCount = document.getElementById('selectCount');
+  const selectModeBtn = document.getElementById('selectModeBtn');
+
+  function refreshSelectionUi(){
+    // A box deleted here or on another device must not linger in the
+    // selection and print a label for something that no longer exists.
+    [...selectedIds].forEach(id => {
+      const it = items.find(i => i.id === id);
+      if(!it || it.deleted) selectedIds.delete(id);
+    });
+    const n = selectedIds.size;
+    selectCount.textContent = n === 1 ? '1 selected' : `${n} selected`;
+    const sheetBtn = document.getElementById('printSheetBtn');
+    if(selectMode){
+      sheetBtn.textContent = n === 0 ? 'Print selected'
+        : n === 1 ? 'Print 1 selected' : `Print ${n} selected`;
+      sheetBtn.disabled = n === 0;
+    }
+  }
+
+  selectModeBtn.addEventListener('click', ()=>{
+    selectMode = !selectMode;
+    // Leaving the mode clears the picks. Invisible state that still
+    // decides what prints is worse than making you tick again.
+    if(!selectMode) selectedIds.clear();
+    selectModeBtn.textContent = selectMode ? 'Done' : 'Select';
+    selectModeBtn.classList.toggle('btn-primary', selectMode);
+    selectBar.classList.toggle('show', selectMode);
+    render();
+  });
+
+  document.getElementById('selectAllShownBtn').addEventListener('click', ()=>{
+    boxesCurrentlyShown().forEach(it => selectedIds.add(it.id));
+    render();
+  });
+
+  document.getElementById('clearSelectionBtn').addEventListener('click', ()=>{
+    selectedIds.clear();
+    render();
+  });
+
   document.getElementById('printSheetBtn').addEventListener('click', ()=>{
-    const shown = boxesCurrentlyShown();
-    if(!shown.length) return;
-    renderSheet(shown);
+    const list = boxesToPrint();
+    if(!list.length) return;
+    renderSheet(list);
     printLabelArea();
   });
 
