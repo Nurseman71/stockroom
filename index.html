@@ -167,6 +167,29 @@
   }
   .highlight-banner.show{ display:flex; }
 
+  /* ---------- Storage warning banner ----------
+     Persists until dismissed. The sync status line is NOT a usable home
+     for this: syncSoon() fires right after a save and overwrites it with
+     a green "synced <time>" inside a second. */
+  .storage-banner{
+    display:none;
+    align-items:center;
+    justify-content:space-between;
+    gap:12px;
+    padding:12px 28px;
+    background:rgba(181,73,63,0.12);
+    border-bottom:1px solid var(--stamp);
+    font-size:13px;
+    line-height:1.4;
+    color:var(--paper);
+  }
+  .storage-banner.show{ display:flex; }
+  .storage-banner.critical{
+    background:rgba(181,73,63,0.28);
+    border-bottom-width:2px;
+  }
+  .storage-banner button{ flex:none; }
+
   /* ---------- Grid ---------- */
   main{ padding:24px 28px calc(60px + env(safe-area-inset-bottom)); }
   .grid{
@@ -504,6 +527,11 @@
   <button id="clearHighlightBtn">Show all boxes</button>
 </div>
 
+<div class="storage-banner" id="storageBanner">
+  <span id="storageBannerText"></span>
+  <button id="storageBannerDismiss">Dismiss</button>
+</div>
+
 <div class="toolbar">
   <input type="text" id="searchInput" placeholder="Search contents, box #, location, tags…">
   <div class="tag-chips" id="tagChips"></div>
@@ -607,6 +635,10 @@
   let autoSyncTimer = null;
   let selectedTags = new Set();
   let highlightId = null;
+  // Photos that localStorage refused to hold (quota full). Kept in memory
+  // for the life of the tab so they can still upload on the next sync,
+  // instead of being lost along with the box that owned them.
+  const pendingUploads = new Map();
 
   const grid = document.getElementById('grid');
   const emptyState = document.getElementById('emptyState');
@@ -615,6 +647,34 @@
   const countPill = document.getElementById('countPill');
   const syncStatus = document.getElementById('syncStatus');
   const highlightBanner = document.getElementById('highlightBanner');
+  const storageBanner = document.getElementById('storageBanner');
+  const storageBannerText = document.getElementById('storageBannerText');
+
+  // localStorage is a hard per-origin budget (~5MB in Safari), and the
+  // photo cache is by far the biggest thing in it. setItem THROWS when
+  // that budget is exceeded -- and an unguarded throw inside the Save
+  // handler used to abort it before the box was ever appended to `items`,
+  // so the box vanished with no error shown. Every write goes through
+  // here now and reports failure instead of raising.
+  function trySetItem(key, value){
+    try{
+      localStorage.setItem(key, value);
+      return true;
+    }catch(e){
+      return false;
+    }
+  }
+  function storageWarning(msg, critical){
+    // Deliberately NOT alert(): this fires on a phone as often as on the
+    // Mac, and a blocking dialog there is both hostile and, on iOS, easy
+    // to dismiss reflexively without reading. A banner stays put.
+    storageBannerText.textContent = msg;
+    storageBanner.classList.add('show');
+    if(critical) storageBanner.classList.add('critical');
+  }
+  document.getElementById('storageBannerDismiss').addEventListener('click', ()=>{
+    storageBanner.classList.remove('show', 'critical');
+  });
 
   function loadLocal(){
     try{
@@ -623,7 +683,9 @@
     }catch(e){ items = []; }
   }
   function saveLocal(){
-    localStorage.setItem(LS_KEY, JSON.stringify(items));
+    if(!trySetItem(LS_KEY, JSON.stringify(items))){
+      storageWarning('Browser storage is full — this change was NOT saved locally. Sync to the server before closing this tab.', true);
+    }
   }
   function getServerUrl(){
     return (localStorage.getItem(LS_SERVER_KEY) || '').trim().replace(/\/$/, '');
@@ -653,7 +715,7 @@
     catch(e){ return {}; }
   }
   function savePhotoCache(cache){
-    localStorage.setItem(LS_PHOTO_CACHE_KEY, JSON.stringify(cache));
+    return trySetItem(LS_PHOTO_CACHE_KEY, JSON.stringify(cache));
   }
   function loadPhotoQueue(){
     try{ return JSON.parse(localStorage.getItem(LS_PHOTO_QUEUE_KEY) || '[]'); }
@@ -668,7 +730,14 @@
     if(cache[item.id]) return cache[item.id];
     if(item.photoFilename && getServerUrl()){
       const token = encodeURIComponent(getSyncToken());
-      return `${getServerUrl()}/photos/${item.photoFilename}?token=${token}`;
+      // Cache-buster. The photo filename is deterministic (<id>.jpg), so
+      // replacing a box's photo produces a byte-different image at an
+      // IDENTICAL URL -- and the server serves it with max-age=86400.
+      // Without this, every other device kept showing the OLD photo for
+      // a full day. `updatedAt` changes on every save, so a replaced
+      // photo always lands on a fresh URL.
+      const v = encodeURIComponent(item.updatedAt || '');
+      return `${getServerUrl()}/photos/${item.photoFilename}?token=${token}&v=${v}`;
     }
     return null;
   }
@@ -690,6 +759,7 @@
 
     tagChips.querySelectorAll('[data-tag]').forEach(btn => {
       btn.addEventListener('click', () => {
+        clearHighlight();
         const t = btn.dataset.tag;
         if(selectedTags.has(t)) selectedTags.delete(t);
         else selectedTags.add(t);
@@ -700,6 +770,17 @@
 
   function escapeHtml(s){
     return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  // A scanned label pins the shelf to a single box -- matchesFilters
+  // returns on highlightId before search or tags are ever consulted. Any
+  // deliberate attempt to look at something ELSE has to release that pin
+  // first, or the control just appears broken: you type, and the list
+  // never changes.
+  function clearHighlight(){
+    if(!highlightId) return;
+    highlightId = null;
+    history.replaceState(null, '', location.pathname);
   }
 
   function matchesFilters(item, q){
@@ -964,7 +1045,12 @@
       photoFilename = id + '.jpg';
       const cache = loadPhotoCache();
       cache[id] = pendingPhotoData;
-      savePhotoCache(cache);
+      if(!savePhotoCache(cache)){
+        // No room to cache it on disk. Hold it in memory so the upload
+        // still happens, and warn -- but never abort the box save.
+        pendingUploads.set(id, pendingPhotoData);
+        storageWarning('Photo could not be cached in this browser (storage full) — it will still upload on the next sync.', false);
+      }
       const queue = loadPhotoQueue();
       if(!queue.includes(id)){
         queue.push(id);
@@ -985,7 +1071,17 @@
     };
     if(editingId){
       const idx = items.findIndex(i=>i.id===editingId);
-      items[idx] = { ...items[idx], ...payload };
+      if(idx === -1){
+        // The box left `items` between opening the modal and saving --
+        // a sync can replace the whole array mid-edit. Unguarded, this
+        // ran `items[-1] = ...`, which sets a "-1" PROPERTY on the array
+        // rather than an element: no error, no box, and the edit the
+        // user just typed was gone. Re-insert under the same id instead;
+        // its newer updatedAt wins the merge on the next sync.
+        items.push({ id: editingId, ...payload });
+      } else {
+        items[idx] = { ...items[idx], ...payload };
+      }
     } else {
       items.push({ id, ...payload });
     }
@@ -1189,11 +1285,13 @@
   });
 
   // ---------- Search / filter ----------
-  searchInput.addEventListener('input', render);
+  searchInput.addEventListener('input', ()=>{
+    if(searchInput.value.trim()) clearHighlight();
+    render();
+  });
 
   document.getElementById('clearHighlightBtn').addEventListener('click', ()=>{
-    highlightId = null;
-    history.replaceState(null, '', location.pathname);
+    clearHighlight();
     render();
   });
 
@@ -1330,7 +1428,7 @@
     const stillQueued = [];
     for(const id of queue){
       const item = items.find(i => i.id === id);
-      const dataUrl = cache[id];
+      const dataUrl = cache[id] || pendingUploads.get(id);
       if(!item || item.deleted || !dataUrl){
         continue; // nothing to upload — drop it from the queue
       }
@@ -1340,7 +1438,9 @@
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({data: dataUrl})
         });
-        if(!res.ok){
+        if(res.ok){
+          pendingUploads.delete(id); // safely on the server now
+        } else {
           stillQueued.push(id); // leave it for next time
         }
       }catch(e){
