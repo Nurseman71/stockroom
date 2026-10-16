@@ -81,3 +81,24 @@ struct LabelCodeTests {
         #expect(LabelCode.boxID(from: "https://x.ts.net/?boxid=..%2F..%2Fetc") == nil)
     }
 }
+
+struct LabelPrintingTests {
+    @Test func labelLinkRoundTripsThroughScanner() {
+        let link = LabelCode.link(base: "https://mac.tailnet.ts.net/stockroom/", id: "b_mtg0irgd_o05xzc")
+        #expect(link == "https://mac.tailnet.ts.net/stockroom/?boxid=b_mtg0irgd_o05xzc")   // same shape the web app prints
+        #expect(LabelCode.boxID(from: link) == "b_mtg0irgd_o05xzc")
+    }
+
+    @Test func qrHasFinderPatternsInTheRightCorners() {
+        // Finder patterns must be top-left, top-right, bottom-left. A
+        // vertically mirrored code (bottom-right finder) won't scan.
+        let m = QRMatrix.modules(for: "https://mac.tailnet.ts.net/stockroom/?boxid=b_mtg0irgd_o05xzc")
+        let n = m.count
+        #expect(n >= 21 && (n - 17) % 4 == 0, "not a valid QR size: \(n)")
+        #expect(m.allSatisfy { $0.count == n })
+        #expect(QRMatrix.hasFinder(m, atRow: 0, col: 0))
+        #expect(QRMatrix.hasFinder(m, atRow: 0, col: n - 7))
+        #expect(QRMatrix.hasFinder(m, atRow: n - 7, col: 0))
+        #expect(!QRMatrix.hasFinder(m, atRow: n - 7, col: n - 7))
+    }
+}

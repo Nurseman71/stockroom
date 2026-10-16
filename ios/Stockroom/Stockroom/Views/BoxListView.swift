@@ -20,16 +20,24 @@ struct BoxListView: View {
     @State private var pendingDelete: Box?
     @State private var newBox: Box?
     @State private var scanning = false
+    /// Choosing boxes for a label sheet. Held as ids, not a filtered list,
+    /// so picks survive searching (same design as the web Select mode).
+    @State private var choosing = false
+    @State private var picked: Set<String> = []
+    /// Non-nil presents the print sheet. The boxes travel WITH the
+    /// presentation (sheet(item:)) — a separate isPresented flag let the
+    /// sheet render before the list was set, giving a blank page.
+    @State private var printJob: PrintJob?
 
     var body: some View {
-        List(selection: $selection) {
+        List(selection: choosing ? .constant(nil) : $selection) {
             if !selectedTags.isEmpty {
                 Section { activeFilterChips }
             }
             ForEach(sections, id: \.key) { section in
                 Section {
                     ForEach(section.boxes) { box in
-                        BoxRow(box: box)
+                        row(for: box)
                             .tag(box.id)
                             .swipeActions(edge: .trailing) {
                                 Button("Delete", systemImage: "trash", role: .destructive) {
@@ -54,6 +62,23 @@ struct BoxListView: View {
         .overlay { emptyState }
         .refreshable { await store.sync() }
         .toolbar {
+          if choosing {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Cancel") { choosing = false; picked.removeAll() }
+            }
+            ToolbarItem(placement: .principal) {
+                Text(picked.isEmpty ? "Choose Boxes" : "\(picked.count) Selected").font(.headline)
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Button("All Shown") { picked.formUnion(filtered.map(\.id)) }
+            }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("Print", systemImage: "printer") {
+                    startPrinting(store.visibleBoxes.filter { picked.contains($0.id) })
+                }
+                .disabled(picked.isEmpty)
+            }
+          } else {
             ToolbarItem(placement: .topBarLeading) {
                 SyncStatusButton { showingSettings = true }
             }
@@ -71,8 +96,15 @@ struct BoxListView: View {
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
+                if !store.visibleBoxes.isEmpty { printMenu }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button("Settings", systemImage: "gearshape") { showingSettings = true }
             }
+          }
+        }
+        .sheet(item: $printJob) { job in
+            LabelPrintView(boxes: job.boxes)
         }
         .fullScreenCover(isPresented: $scanning) {
             LabelScannerSheet { id in
@@ -98,6 +130,51 @@ struct BoxListView: View {
         } message: { _ in
             Text("It will be removed from every device on the next sync.")
         }
+    }
+
+    // MARK: Label printing
+
+    private var printMenu: some View {
+        Menu {
+            Button("All Shown (\(filtered.count))", systemImage: "square.stack") {
+                startPrinting(filtered)
+            }
+            .disabled(filtered.isEmpty)
+            Button("Choose Boxes…", systemImage: "checkmark.circle") {
+                picked.removeAll()
+                choosing = true
+            }
+        } label: {
+            Label("Print Labels", systemImage: "printer")
+        }
+    }
+
+    @ViewBuilder private func row(for box: Box) -> some View {
+        if choosing {
+            let on = picked.contains(box.id)
+            Button {
+                if on { picked.remove(box.id) } else { picked.insert(box.id) }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: on ? "checkmark.circle.fill" : "circle")
+                        .font(.title3)
+                        .foregroundStyle(on ? Color.accentColor : Color.secondary)
+                    BoxRow(box: box)
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(on ? .isSelected : [])
+        } else {
+            BoxRow(box: box)
+        }
+    }
+
+    private func startPrinting(_ boxes: [Box]) {
+        guard !boxes.isEmpty else { return }
+        printJob = PrintJob(boxes: boxes)
+        choosing = false
+        picked.removeAll()
     }
 
     // MARK: Tag filter
@@ -212,6 +289,12 @@ struct BoxListView: View {
         if let x = Int(a.box), let y = Int(b.box), x != y { return x < y }
         return a.box.localizedStandardCompare(b.box) == .orderedAscending
     }
+}
+
+/// One print request; identity per request so re-printing re-presents.
+struct PrintJob: Identifiable {
+    let id = UUID()
+    let boxes: [Box]
 }
 
 // MARK: - Row

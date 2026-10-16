@@ -12,6 +12,7 @@ struct BoxDetailView: View {
     let box: Box
     @State private var showingPhoto = false
     @State private var editing = false
+    @State private var printing = false
 
     private var items: [String] {
         box.contents.split(whereSeparator: \.isNewline)
@@ -99,8 +100,14 @@ struct BoxDetailView: View {
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
+                Button("Print Label", systemImage: "printer") { printing = true }
+            }
+            ToolbarItem(placement: .primaryAction) {
                 Button("Edit") { editing = true }
             }
+        }
+        .sheet(isPresented: $printing) {
+            LabelPrintView(boxes: [box])
         }
         .sheet(isPresented: $editing) {
             BoxEditorView(box: box, isNew: false)

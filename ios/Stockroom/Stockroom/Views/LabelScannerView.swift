@@ -21,6 +21,15 @@ nonisolated enum LabelCode {
               !id.isEmpty, !id.contains("/") else { return nil }
         return id
     }
+
+    /// The link printed on a label — the same "<server>/?boxid=<id>" the
+    /// web app prints, so either app's labels work with both.
+    static func link(base: String, id: String) -> String {
+        var trimmed = base.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasSuffix("/") { trimmed.removeLast() }
+        let encoded = id.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? id
+        return trimmed + "/?boxid=" + encoded
+    }
 }
 
 struct LabelScannerSheet: View {
