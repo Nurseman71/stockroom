@@ -1,0 +1,13 @@
+# Xcode per-user state and build output — never commit these
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Local-only config (server URL / token are entered in-app and stored in the Keychain,
+# but guard against anyone dropping a config file in here — the repo is public)
+*.local.xcconfig
+Secrets.swift

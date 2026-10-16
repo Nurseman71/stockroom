@@ -1,0 +1,558 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 110;
+	objects = {
+
+/* Begin PBXContainerItemProxy section */
+		B0F1C4B73082833D00E039CD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B0F1C4A13082833C00E039CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B0F1C4A83082833C00E039CD;
+			remoteInfo = Stockroom;
+		};
+		B0F1C4C13082833D00E039CD /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = B0F1C4A13082833C00E039CD /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = B0F1C4A83082833C00E039CD;
+			remoteInfo = Stockroom;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		B0F1C4A93082833C00E039CD /* Stockroom.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stockroom.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0F1C4B63082833D00E039CD /* StockroomTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockroomTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0F1C4C03082833D00E039CD /* StockroomUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockroomUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		B0F1C4AB3082833C00E039CD /* Stockroom */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Stockroom;
+			sourceTree = "<group>";
+		};
+		B0F1C4B93082833D00E039CD /* StockroomTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StockroomTests;
+			sourceTree = "<group>";
+		};
+		B0F1C4C33082833D00E039CD /* StockroomUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = StockroomUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B0F1C4A63082833C00E039CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4B33082833D00E039CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4BD3082833D00E039CD /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+			);
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		B0F1C4A03082833C00E039CD = {
+			isa = PBXGroup;
+			children = (
+				B0F1C4AB3082833C00E039CD /* Stockroom */,
+				B0F1C4B93082833D00E039CD /* StockroomTests */,
+				B0F1C4C33082833D00E039CD /* StockroomUITests */,
+				B0F1C4AA3082833C00E039CD /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		B0F1C4AA3082833C00E039CD /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				B0F1C4A93082833C00E039CD /* Stockroom.app */,
+				B0F1C4B63082833D00E039CD /* StockroomTests.xctest */,
+				B0F1C4C03082833D00E039CD /* StockroomUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		B0F1C4A83082833C00E039CD /* Stockroom */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0F1C4C83082833D00E039CD /* Build configuration list for PBXNativeTarget "Stockroom" */;
+			buildPhases = (
+				B0F1C4A53082833C00E039CD /* Sources */,
+				B0F1C4A63082833C00E039CD /* Frameworks */,
+				B0F1C4A73082833C00E039CD /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				B0F1C4AB3082833C00E039CD /* Stockroom */,
+			);
+			name = Stockroom;
+			productName = Stockroom;
+			productReference = B0F1C4A93082833C00E039CD /* Stockroom.app */;
+			productType = "com.apple.product-type.application";
+		};
+		B0F1C4B53082833D00E039CD /* StockroomTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0F1C4CB3082833D00E039CD /* Build configuration list for PBXNativeTarget "StockroomTests" */;
+			buildPhases = (
+				B0F1C4B23082833D00E039CD /* Sources */,
+				B0F1C4B33082833D00E039CD /* Frameworks */,
+				B0F1C4B43082833D00E039CD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B0F1C4B83082833D00E039CD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B0F1C4B93082833D00E039CD /* StockroomTests */,
+			);
+			name = StockroomTests;
+			productName = StockroomTests;
+			productReference = B0F1C4B63082833D00E039CD /* StockroomTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		B0F1C4BF3082833D00E039CD /* StockroomUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B0F1C4CE3082833D00E039CD /* Build configuration list for PBXNativeTarget "StockroomUITests" */;
+			buildPhases = (
+				B0F1C4BC3082833D00E039CD /* Sources */,
+				B0F1C4BD3082833D00E039CD /* Frameworks */,
+				B0F1C4BE3082833D00E039CD /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				B0F1C4C23082833D00E039CD /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				B0F1C4C33082833D00E039CD /* StockroomUITests */,
+			);
+			name = StockroomUITests;
+			productName = StockroomUITests;
+			productReference = B0F1C4C03082833D00E039CD /* StockroomUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		B0F1C4A13082833C00E039CD /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2710;
+				LastUpgradeCheck = 2710;
+				TargetAttributes = {
+					B0F1C4A83082833C00E039CD = {
+						CreatedOnToolsVersion = 27.1;
+					};
+					B0F1C4B53082833D00E039CD = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = B0F1C4A83082833C00E039CD;
+					};
+					B0F1C4BF3082833D00E039CD = {
+						CreatedOnToolsVersion = 27.1;
+						TestTargetID = B0F1C4A83082833C00E039CD;
+					};
+				};
+			};
+			buildConfigurationList = B0F1C4A43082833C00E039CD /* Build configuration list for PBXProject "Stockroom" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = B0F1C4A03082833C00E039CD;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = B0F1C4AA3082833C00E039CD /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				B0F1C4A83082833C00E039CD /* Stockroom */,
+				B0F1C4B53082833D00E039CD /* StockroomTests */,
+				B0F1C4BF3082833D00E039CD /* StockroomUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		B0F1C4A73082833C00E039CD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4B43082833D00E039CD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4BE3082833D00E039CD /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		B0F1C4A53082833C00E039CD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4B23082833D00E039CD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+		B0F1C4BC3082833D00E039CD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		B0F1C4B83082833D00E039CD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B0F1C4A83082833C00E039CD /* Stockroom */;
+			targetProxy = B0F1C4B73082833D00E039CD /* PBXContainerItemProxy */;
+		};
+		B0F1C4C23082833D00E039CD /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = B0F1C4A83082833C00E039CD /* Stockroom */;
+			targetProxy = B0F1C4C13082833D00E039CD /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		B0F1C4C63082833D00E039CD /* Debug configuration for PBXProject "Stockroom" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B0F1C4C73082833D00E039CD /* Release configuration for PBXProject "Stockroom" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		B0F1C4C93082833D00E039CD /* Debug configuration for PBXNativeTarget "Stockroom" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Stockroom uses the camera to photograph what's inside your boxes.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.Stockroom;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B0F1C4CA3082833D00E039CD /* Release configuration for PBXNativeTarget "Stockroom" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "Stockroom uses the camera to photograph what's inside your boxes.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.Stockroom;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SUPPORTS_XR_DESIGNED_FOR_IPHONE_IPAD = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		B0F1C4CC3082833D00E039CD /* Debug configuration for PBXNativeTarget "StockroomTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.StockroomTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockroom.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Stockroom";
+			};
+			name = Debug;
+		};
+		B0F1C4CD3082833D00E039CD /* Release configuration for PBXNativeTarget "StockroomTests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.StockroomTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Stockroom.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Stockroom";
+			};
+			name = Release;
+		};
+		B0F1C4CF3082833D00E039CD /* Debug configuration for PBXNativeTarget "StockroomUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.StockroomUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Stockroom;
+			};
+			name = Debug;
+		};
+		B0F1C4D03082833D00E039CD /* Release configuration for PBXNativeTarget "StockroomUITests" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 6SPRFTQDT5;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.christopherreiter.StockroomUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRING_CATALOG_GENERATE_SYMBOLS = NO;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = Stockroom;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		B0F1C4A43082833C00E039CD /* Build configuration list for PBXProject "Stockroom" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0F1C4C63082833D00E039CD /* Debug configuration for PBXProject "Stockroom" */,
+				B0F1C4C73082833D00E039CD /* Release configuration for PBXProject "Stockroom" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		B0F1C4C83082833D00E039CD /* Build configuration list for PBXNativeTarget "Stockroom" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0F1C4C93082833D00E039CD /* Debug configuration for PBXNativeTarget "Stockroom" */,
+				B0F1C4CA3082833D00E039CD /* Release configuration for PBXNativeTarget "Stockroom" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		B0F1C4CB3082833D00E039CD /* Build configuration list for PBXNativeTarget "StockroomTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0F1C4CC3082833D00E039CD /* Debug configuration for PBXNativeTarget "StockroomTests" */,
+				B0F1C4CD3082833D00E039CD /* Release configuration for PBXNativeTarget "StockroomTests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		B0F1C4CE3082833D00E039CD /* Build configuration list for PBXNativeTarget "StockroomUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B0F1C4CF3082833D00E039CD /* Debug configuration for PBXNativeTarget "StockroomUITests" */,
+				B0F1C4D03082833D00E039CD /* Release configuration for PBXNativeTarget "StockroomUITests" */,
+			);
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = B0F1C4A13082833C00E039CD /* Project object */;
+	validationLevel = 1;
+}
