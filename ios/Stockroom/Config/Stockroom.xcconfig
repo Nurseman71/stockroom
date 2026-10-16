@@ -1,0 +1,14 @@
+// Stockroom.xcconfig — committed defaults for the Stockroom app target.
+//
+// STOCKROOM_LINK_DOMAIN is the host printed box labels point to; it feeds the
+// Associated Domains entitlement (Universal Links) in Stockroom.entitlements.
+// The real value is a private Tailscale hostname and this repo is PUBLIC, so
+// it lives in Stockroom.local.xcconfig next to this file, which is gitignored:
+//
+//     STOCKROOM_LINK_DOMAIN = your-mac.your-tailnet.ts.net
+//
+// Without that file the app still builds; label links just open the web app.
+
+STOCKROOM_LINK_DOMAIN = stockroom.invalid
+
+#include? "Stockroom.local.xcconfig"

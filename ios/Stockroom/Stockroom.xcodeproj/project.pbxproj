@@ -27,6 +27,8 @@
 		B0F1C4A93082833C00E039CD /* Stockroom.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Stockroom.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0F1C4B63082833D00E039CD /* StockroomTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockroomTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B0F1C4C03082833D00E039CD /* StockroomUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = StockroomUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		B0F1C4F03082834000E039CD /* Config/Stockroom.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Stockroom.xcconfig; sourceTree = "<group>"; };
+		B0F1C4F13082834000E039CD /* Config/Stockroom.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Config/Stockroom.entitlements; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -69,6 +71,8 @@
 		B0F1C4A03082833C00E039CD = {
 			isa = PBXGroup;
 			children = (
+				B0F1C4F03082834000E039CD /* Config/Stockroom.xcconfig */,
+				B0F1C4F13082834000E039CD /* Config/Stockroom.entitlements */,
 				B0F1C4AB3082833C00E039CD /* Stockroom */,
 				B0F1C4B93082833D00E039CD /* StockroomTests */,
 				B0F1C4C33082833D00E039CD /* StockroomUITests */,
@@ -366,9 +370,11 @@
 		};
 		B0F1C4C93082833D00E039CD /* Debug configuration for PBXNativeTarget "Stockroom" */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B0F1C4F03082834000E039CD /* Config/Stockroom.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/Stockroom.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6SPRFTQDT5;
@@ -400,9 +406,11 @@
 		};
 		B0F1C4CA3082833D00E039CD /* Release configuration for PBXNativeTarget "Stockroom" */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = B0F1C4F03082834000E039CD /* Config/Stockroom.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/Stockroom.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6SPRFTQDT5;

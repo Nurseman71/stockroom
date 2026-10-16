@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Universal Links for printed labels (https://<host>/?boxid=...).
+	  mode=developer: the host is tailnet-only, so iOS must fetch
+	  apple-app-site-association directly instead of via Apple's CDN. Works for
+	  Xcode-installed (development-signed) builds on a phone with
+	  Settings > Developer > Associated Domains Development turned on.
+	  The host comes from Stockroom.xcconfig / Stockroom.local.xcconfig.
+	-->
+	<key>com.apple.developer.associated-domains</key>
+	<array>
+		<string>applinks:$(STOCKROOM_LINK_DOMAIN)?mode=developer</string>
+	</array>
+</dict>
+</plist>

@@ -94,6 +94,26 @@ GEMINI_KEY_FILE = BASE_DIR / "gemini_api_key.txt"
 GIT_DIR = BASE_DIR / ".git"
 TOMBSTONE_MAX_AGE_DAYS = 30
 
+# Universal Links for the native iPhone app (ios/). iOS fetches this file to
+# confirm the app may open https://<host>/stockroom/?boxid=... links -- i.e.
+# scanning a printed label with the stock Camera app opens the app instead of
+# the web page. iOS ignores links that carry a port, so labels must use
+# Tailscale's :443, where this server is mounted at /stockroom (the rest of
+# :443 belongs to another service, so only /stockroom/ is claimed). It names only the app's ID (team + bundle id, both already public in
+# ios/Stockroom.xcodeproj), so it is served without the sync token.
+APPLE_APP_ID = "6SPRFTQDT5.com.christopherreiter.Stockroom"
+APPLE_APP_SITE_ASSOCIATION = {
+    "applinks": {
+        "details": [{
+            "appIDs": [APPLE_APP_ID],
+            "components": [
+                {"/": "/stockroom/", "?": {"boxid": "*"}, "comment": "printed box labels"},
+                {"/": "/stockroom/index.html", "?": {"boxid": "*"}, "comment": "printed box labels"},
+            ],
+        }]
+    }
+}
+
 # Google renames/retires Gemini model IDs often (multiple times in 2026
 # alone) — if identify-photo starts failing with a 404-ish "model not
 # found" error, check https://ai.google.dev/gemini-api/docs/models for
@@ -569,6 +589,16 @@ class Handler(BaseHTTPRequestHandler):
             # stale copy to clear, and this app has already paid for
             # stale copies once (see the two-live-copies problem).
             self._send_file(BASE_DIR / "sw.js", "text/javascript; charset=utf-8", "no-store")
+        elif path == "/.well-known/apple-app-site-association":
+            # Must be served as JSON over HTTPS with no redirect; Tailscale
+            # provides the HTTPS (see stockroom-ios-app notes).
+            body = json.dumps(APPLE_APP_SITE_ASSOCIATION).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/manifest.webmanifest":
             self._send_file(BASE_DIR / "manifest.webmanifest", "application/manifest+json; charset=utf-8")
         elif path in ("/", "/index.html"):

@@ -1976,7 +1976,11 @@
     : 'GitHub Pages copy — not served by the sync server';
 
   if(boot && boot.token && !getServerUrl()){
-    localStorage.setItem(LS_SERVER_KEY, location.origin);
+    // The folder the page was served from, not just the origin: served at
+    // "/" this equals location.origin as before, but behind Tailscale's
+    // /stockroom mount on :443 (needed for iOS Universal Links, which ignore
+    // links with a port) the API lives at <origin>/stockroom/api/...
+    localStorage.setItem(LS_SERVER_KEY, new URL('.', location.href).href.replace(/\/+$/, ''));
     localStorage.setItem(LS_TOKEN_KEY, boot.token);
     localStorage.setItem(LS_AUTOSYNC_KEY, '1');
   }
