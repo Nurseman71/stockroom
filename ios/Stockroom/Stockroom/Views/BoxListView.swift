@@ -14,6 +14,11 @@ struct BoxListView: View {
     @Environment(BoxStore.self) private var store
     @Binding var selection: String?
     @Binding var showingSettings: Bool
+    /// Folded (outer screen) or squeezed into Split View: you're most likely
+    /// standing at a shelf, so Scan and New Box get big buttons up top.
+    /// Passed in by RootView — see the comment on RootView.list.
+    var atShelfLayout = false
+    private var atTheShelf: Bool { atShelfLayout && !choosing && store.isConfigured }
 
     @State private var query = ""
     @State private var selectedTags: Set<String> = []   // normalized keys
@@ -31,6 +36,11 @@ struct BoxListView: View {
 
     var body: some View {
         List(selection: choosing ? .constant(nil) : $selection) {
+            if atTheShelf {
+                Section { shelfActions }
+                    .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                    .listRowBackground(Color.clear)
+            }
             if !selectedTags.isEmpty {
                 Section { activeFilterChips }
             }
@@ -85,14 +95,14 @@ struct BoxListView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 if !store.allTags.isEmpty { tagMenu }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                if LabelScannerSheet.isAvailable {
-                    Button("Scan Label", systemImage: "qrcode.viewfinder") { scanning = true }
+            if !atTheShelf {   // folded, these are the big buttons instead
+                ToolbarItem(placement: .topBarTrailing) {
+                    if LabelScannerSheet.isAvailable {
+                        Button("Scan Label", systemImage: "qrcode.viewfinder") { scanning = true }
+                    }
                 }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button("New Box", systemImage: "plus") {
-                    newBox = Box.blank(boxNumber: store.suggestedNextBoxNumber)
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("New Box", systemImage: "plus", action: startNewBox)
                 }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -130,6 +140,43 @@ struct BoxListView: View {
         } message: { _ in
             Text("It will be removed from every device on the next sync.")
         }
+    }
+
+    // MARK: At the shelf (folded)
+
+    private var shelfActions: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Button { scanning = true } label: {
+                    Label("Scan Label", systemImage: "qrcode.viewfinder")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!LabelScannerSheet.isAvailable)
+
+                Button(action: startNewBox) {
+                    Label("New Box", systemImage: "plus")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                }
+                .buttonStyle(.bordered)
+            }
+            .controlSize(.large)
+            .buttonBorderShape(.roundedRectangle(radius: 14))
+            if !LabelScannerSheet.isAvailable {
+                Text("Scanning needs the camera — not available here.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+            }
+        }
+    }
+
+    private func startNewBox() {
+        newBox = Box.blank(boxNumber: store.suggestedNextBoxNumber)
     }
 
     // MARK: Label printing

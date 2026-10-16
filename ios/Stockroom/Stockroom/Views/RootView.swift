@@ -2,7 +2,7 @@
 //  RootView.swift
 //  Stockroom
 //
-//  The Duo layout lives here, and it is deliberately just a
+//  The Duo layout lives here. Mostly it is just a
 //  NavigationSplitView: unfolded (regular width) it shows the box list and
 //  the selected box side by side; folded onto the 5.4" outer display, or
 //  squeezed into half of Split View (compact width), SwiftUI collapses the
@@ -20,25 +20,49 @@ struct RootView: View {
     @State private var showingSettings = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var labelNotFound = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @State private var window = WindowGeometry()
+
+    /// Unfolded flat in landscape, the crease runs down the middle of the
+    /// SCREEN. Returns the list width that puts the pane divider exactly on
+    /// it, or nil in every other posture (folded, portrait, Split View).
+    ///
+    /// NavigationSplitView can't do this: iOS caps the sidebar width (it
+    /// stopped at ~44% on the simulated Duo), so this posture gets a plain
+    /// two-pane HStack instead. The Duo's vertical status bar insets the
+    /// window on one side, hence measuring the full screen width from the
+    /// safe-area insets rather than using the view's own width.
+    /// (A geometric stand-in until Apple documents its fold APIs.)
+    private var hingeListWidth: CGFloat? {
+        guard sizeClass == .regular,
+              window.fullWidth > window.size.height,
+              window.fullWidth >= 700 else { return nil }
+        return (window.fullWidth / 2 - window.leadingInset).rounded()
+    }
 
     var body: some View {
-        NavigationSplitView(columnVisibility: $columnVisibility) {
-            BoxListView(selection: $selection, showingSettings: $showingSettings)
-                .navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 460)
-        } detail: {
-            NavigationStack {
-                if let id = selection, let box = store.box(id: id) {
-                    BoxDetailView(box: box)
-                } else {
-                    ContentUnavailableView(
-                        "No Box Selected",
-                        systemImage: "shippingbox",
-                        description: Text("Pick a box from the list.")
-                    )
+        Group {
+            if let listWidth = hingeListWidth {
+                HStack(spacing: 0) {
+                    NavigationStack { list }
+                        .frame(width: listWidth)
+                    Divider()
+                    detail
                 }
+            } else {
+                NavigationSplitView(columnVisibility: $columnVisibility) {
+                    list.navigationSplitViewColumnWidth(min: 300, ideal: 380, max: 460)
+                } detail: {
+                    detail
+                }
+                .navigationSplitViewStyle(.balanced)
             }
         }
-        .navigationSplitViewStyle(.balanced)
+        .onGeometryChange(for: WindowGeometry.self) { proxy in
+            WindowGeometry(size: proxy.size,
+                           leadingInset: proxy.safeAreaInsets.leading,
+                           trailingInset: proxy.safeAreaInsets.trailing)
+        } action: { window = $0 }
         .sheet(isPresented: $showingSettings) {
             SettingsView()
         }
@@ -74,4 +98,33 @@ struct RootView: View {
             if store.box(id: id) != nil { selection = id } else { labelNotFound = true }
         }
     }
+
+    /// The box list. Folded / Split View get the big "at the shelf" buttons;
+    /// decided here from the WINDOW's size class, because inside a split
+    /// view the sidebar column always reports itself as compact.
+    private var list: some View {
+        BoxListView(selection: $selection, showingSettings: $showingSettings,
+                    atShelfLayout: sizeClass == .compact)
+    }
+
+    private var detail: some View {
+        NavigationStack {
+            if let id = selection, let box = store.box(id: id) {
+                BoxDetailView(box: box)
+            } else {
+                ContentUnavailableView(
+                    "No Box Selected",
+                    systemImage: "shippingbox",
+                    description: Text("Pick a box from the list.")
+                )
+            }
+        }
+    }
+}
+
+nonisolated struct WindowGeometry: Equatable {
+    var size: CGSize = .zero
+    var leadingInset: CGFloat = 0
+    var trailingInset: CGFloat = 0
+    var fullWidth: CGFloat { size.width + leadingInset + trailingInset }
 }
