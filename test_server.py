@@ -20,6 +20,7 @@ directory first -- these tests must never delete a real box photo.
 """
 
 import importlib.util
+import os
 import shutil
 import tempfile
 import unittest
@@ -166,6 +167,127 @@ class PruneOldTombstonesTests(unittest.TestCase):
         item = [box("a", ts(10), deleted=True)]
         self.assertEqual(server.prune_old_tombstones(item, max_age_days=30), item)
         self.assertEqual(server.prune_old_tombstones(item, max_age_days=5), [])
+
+
+class MultiPhotoTests(unittest.TestCase):
+    """
+    Multiple photos per box: `photos` lists them cover first, and
+    `photoFilename` mirrors photos[0] for clients that predate the list.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="stockroom-test-"))
+        self._real_photos = server.PHOTOS_DIR
+        server.PHOTOS_DIR = self.tmp          # never touch the real photos/
+        self.assertNotEqual(server.PHOTOS_DIR, self._real_photos)
+
+    def tearDown(self):
+        server.PHOTOS_DIR = self._real_photos
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def make_photo(self, name, age_seconds=0, folder=None):
+        folder = folder or self.tmp
+        folder.mkdir(exist_ok=True)
+        path = folder / name
+        path.write_bytes(b"not really a jpeg")
+        if age_seconds:
+            t = datetime.now(timezone.utc).timestamp() - age_seconds
+            os.utime(path, (t, t))
+        return path
+
+    # -- normalize_photos -------------------------------------------------
+
+    def test_legacy_single_photo_becomes_a_one_item_list(self):
+        item = server.normalize_photos(box("a", ts(0), photoFilename="a.jpg"))
+        self.assertEqual(item["photos"], ["a.jpg"])
+        self.assertEqual(item["photoFilename"], "a.jpg")
+
+    def test_cover_follows_the_first_photo(self):
+        item = server.normalize_photos(box("a", ts(0), photos=["a-x1.jpg", "a.jpg"], photoFilename="a-x1.jpg"))
+        self.assertEqual(item["photos"], ["a-x1.jpg", "a.jpg"])
+        self.assertEqual(item["photoFilename"], "a-x1.jpg")
+
+    def test_older_client_setting_photoFilename_is_folded_in_at_the_front(self):
+        item = server.normalize_photos(box("a", ts(0), photos=["a-x1.jpg"], photoFilename="a.jpg"))
+        self.assertEqual(item["photos"], ["a.jpg", "a-x1.jpg"])
+
+    def test_removing_every_photo_clears_the_cover(self):
+        item = server.normalize_photos(box("a", ts(0), photos=[], photoFilename=None))
+        self.assertEqual(item["photos"], [])
+        self.assertIsNone(item["photoFilename"])
+
+    def test_box_without_photos_gets_no_new_keys(self):
+        item = server.normalize_photos(box("a", ts(0)))
+        self.assertNotIn("photos", item)
+
+    def test_another_boxs_photo_cannot_be_claimed(self):
+        item = server.normalize_photos(box("a", ts(0), photos=["b.jpg", "../x.jpg", "a-ok.jpg", "a-ok.jpg"]))
+        self.assertEqual(item["photos"], ["a-ok.jpg"])
+
+    def test_list_is_not_truncated_server_side(self):
+        names = ["a.jpg"] + [f"a-{n}.jpg" for n in range(8)]
+        item = server.normalize_photos(box("a", ts(0), photos=names))
+        self.assertEqual(len(item["photos"]), 9, "dropping photos on the server would be data loss")
+
+    # -- photo keys --------------------------------------------------------
+
+    def test_photo_key_accepts_an_extra_photo_suffix(self):
+        self.assertIsNotNone(server.photo_path_for_id("b_mtg0irgd_o05xzc-mvx1a2"))
+
+    def test_photo_key_rejects_dots_and_double_suffixes(self):
+        for bad in ("a.b", "a-b-c", "a-", "-a", "a b", "a-b/c"):
+            self.assertIsNone(server.photo_path_for_id(bad), bad)
+
+    # -- pruning a tombstone ----------------------------------------------
+
+    def test_pruning_a_tombstone_deletes_all_its_photos(self):
+        p1, p2, p3 = self.make_photo("a.jpg"), self.make_photo("a-x1.jpg"), self.make_photo("a-x2.jpg")
+        server.prune_old_tombstones([box("a", ts(31), deleted=True,
+                                         photos=["a-x1.jpg", "a.jpg", "a-x2.jpg"], photoFilename="a-x1.jpg")])
+        for p in (p1, p2, p3):
+            self.assertFalse(p.exists(), p.name)
+
+    def test_pruning_never_deletes_another_boxs_photo(self):
+        other = self.make_photo("b.jpg")
+        server.prune_old_tombstones([box("a", ts(31), deleted=True, photos=["b.jpg"])])
+        self.assertTrue(other.exists())
+
+    # -- orphan sweep -------------------------------------------------------
+
+    def test_referenced_photos_are_left_alone(self):
+        p = self.make_photo("a-x1.jpg", age_seconds=10 * 86400)
+        server.sweep_orphan_photos([box("a", ts(0), photos=["a-x1.jpg"])])
+        self.assertTrue(p.exists())
+
+    def test_tombstones_still_count_as_references(self):
+        p = self.make_photo("a.jpg", age_seconds=10 * 86400)
+        server.sweep_orphan_photos([box("a", ts(3), deleted=True, photoFilename="a.jpg")])
+        self.assertTrue(p.exists())
+
+    def test_fresh_unreferenced_upload_gets_a_grace_period(self):
+        p = self.make_photo("a-new.jpg", age_seconds=60)
+        server.sweep_orphan_photos([box("a", ts(0), photos=["a.jpg"])])
+        self.assertTrue(p.exists(), "the iPhone app uploads before it syncs the box")
+
+    def test_removed_photo_is_moved_aside_not_deleted(self):
+        self.make_photo("a-gone.jpg", age_seconds=2 * 86400)
+        moved, _, _ = server.sweep_orphan_photos([box("a", ts(0), photos=["a.jpg"])])
+        self.assertEqual(moved, 1)
+        self.assertFalse((self.tmp / "a-gone.jpg").exists())
+        self.assertTrue((self.tmp / "removed" / "a-gone.jpg").exists())
+
+    def test_a_photo_referenced_again_is_restored(self):
+        self.make_photo("a-back.jpg", folder=self.tmp / "removed")
+        _, restored, _ = server.sweep_orphan_photos([box("a", ts(0), photos=["a-back.jpg"])])
+        self.assertEqual(restored, 1)
+        self.assertTrue((self.tmp / "a-back.jpg").exists())
+
+    def test_removed_photos_are_deleted_after_the_window(self):
+        old = self.make_photo("a-old.jpg", age_seconds=31 * 86400, folder=self.tmp / "removed")
+        recent = self.make_photo("a-recent.jpg", age_seconds=5 * 86400, folder=self.tmp / "removed")
+        server.sweep_orphan_photos([])
+        self.assertFalse(old.exists())
+        self.assertTrue(recent.exists())
 
 
 class PathTraversalTests(unittest.TestCase):

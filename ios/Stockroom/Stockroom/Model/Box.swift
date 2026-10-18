@@ -14,6 +14,11 @@
 //     The server picks the winner of a merge by comparing these strings
 //     lexicographically, so the format IS the ordering.
 //  3. Ids use the web app's scheme: "b_" + base36(ms) + "_" + 6 base36.
+//  4. Photos (Oct 2026: up to 6 per box). `photos` lists filenames, cover
+//     first; `photoFilename` is always written as photos[0] (or null) so
+//     older clients still show the cover. A box's original photo is
+//     "<id>.jpg" and every later one "<id>-<suffix>.jpg" — the same
+//     ownership rule the server enforces (photo_belongs_to).
 //
 
 import Foundation
@@ -56,18 +61,24 @@ nonisolated struct Box: Identifiable, Hashable, Sendable, Codable {
     var contents: String
     var location: String
     var tags: [String]
-    var photoFilename: String?
+    /// Photo filenames, cover first. Only names this box owns.
+    var photos: [String] {
+        didSet { photos = Self.ownedPhotos(photos, id: id) }
+    }
     var updatedAt: String
     var deleted: Bool
     /// Every key in the JSON that isn't one of the above.
     var extras: [String: JSONValue] = [:]
 
     static let knownKeys: Set<String> = [
-        "id", "box", "contents", "location", "tags", "photoFilename", "updatedAt", "deleted",
+        "id", "box", "contents", "location", "tags", "photoFilename", "photos", "updatedAt", "deleted",
     ]
 
-    /// The filename the server stores a box's photo under (photo_path_for_id).
-    var expectedPhotoFilename: String { "\(id).jpg" }
+    /// Matches the web app and the server.
+    static let maxPhotos = 6
+
+    /// The cover photo — what older clients know as the box's only photo.
+    var photoFilename: String? { photos.first }
 
     /// A brand-new, unsaved box with a fresh web-compatible id.
     static func blank(boxNumber: String = "", location: String = "") -> Box {
@@ -76,11 +87,60 @@ nonisolated struct Box: Identifiable, Hashable, Sendable, Codable {
     }
 
     init(id: String, box: String, contents: String, location: String, tags: [String],
-         photoFilename: String?, updatedAt: String, deleted: Bool,
+         photoFilename: String? = nil, photos: [String] = [], updatedAt: String, deleted: Bool,
          extras: [String: JSONValue] = [:]) {
         self.id = id; self.box = box; self.contents = contents; self.location = location
-        self.tags = tags; self.photoFilename = photoFilename; self.updatedAt = updatedAt
+        self.tags = tags; self.updatedAt = updatedAt
         self.deleted = deleted; self.extras = extras
+        self.photos = Self.mergedPhotos(photos, cover: photoFilename, id: id)
+    }
+
+    // MARK: Photo names
+
+    /// A fresh, never-reused filename for another photo of box `id`:
+    /// "<id>-<suffix>.jpg", suffix 1–16 base36 chars (server: PHOTO_KEY_RE).
+    static func newPhotoName(for id: String, now: Date = Date()) -> String {
+        let alphabet = Array("0123456789abcdefghijklmnopqrstuvwxyz")
+        let ms = String(Int64((now.timeIntervalSince1970 * 1000).rounded(.down)), radix: 36)
+        let suffix = String(ms.suffix(5)) + String((0..<4).map { _ in alphabet.randomElement()! })
+        return "\(id)-\(suffix).jpg"
+    }
+
+    /// True if `name` is a photo filename owned by box `id` — the server's
+    /// photo_belongs_to rule, so a box can never claim another box's photo.
+    static func owns(_ name: String, id: String) -> Bool {
+        guard !id.isEmpty, name.hasSuffix(".jpg") else { return false }
+        let key = name.dropLast(4)
+        let parts = key.split(separator: "-", omittingEmptySubsequences: false)
+        func ascii(_ s: Substring, underscore: Bool) -> Bool {
+            let allowed = underscore ? Self.photoKeyCharacters : Self.photoSuffixCharacters
+            return s.unicodeScalars.allSatisfy { allowed.contains($0) }
+        }
+        let valid: Bool
+        switch parts.count {
+        case 1: valid = (1...64).contains(parts[0].count) && ascii(parts[0], underscore: true)
+        case 2: valid = (1...64).contains(parts[0].count) && ascii(parts[0], underscore: true)
+                    && (1...16).contains(parts[1].count) && ascii(parts[1], underscore: false)
+        default: valid = false
+        }
+        return valid && (key == Substring(id) || key.hasPrefix(id + "-"))
+    }
+
+    private static let photoSuffixCharacters = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+    private static let photoKeyCharacters = photoSuffixCharacters.union(CharacterSet(charactersIn: "_"))
+
+    /// The list as stored: owned names only, no duplicates, order kept.
+    static func ownedPhotos(_ names: [String], id: String) -> [String] {
+        var seen: Set<String> = []
+        return names.filter { owns($0, id: id) && seen.insert($0).inserted }
+    }
+
+    /// `photoFilename` from an older client goes in front if the list lacks it.
+    static func mergedPhotos(_ names: [String], cover: String?, id: String) -> [String] {
+        var all = names
+        if let cover, !all.contains(cover) { all.insert(cover, at: 0) }
+        return ownedPhotos(all, id: id)
     }
 
     /// Mirrors index.html: 'b_' + Date.now().toString(36) + '_' + 6 random base36 chars.
@@ -122,9 +182,15 @@ nonisolated struct Box: Identifiable, Hashable, Sendable, Codable {
         contents = text("contents") ?? ""
         location = text("location") ?? ""
         tags = (try? c.decode([String].self, forKey: Key("tags"))) ?? []
-        photoFilename = try? c.decode(String.self, forKey: Key("photoFilename"))
+        let cover = try? c.decode(String.self, forKey: Key("photoFilename"))
+        let list: [String] = (try? c.decode([JSONValue].self, forKey: Key("photos")))?
+            .compactMap { (value: JSONValue) -> String? in
+                if case .string(let s) = value { return s }
+                return nil
+            } ?? []
         updatedAt = text("updatedAt") ?? ""
         deleted = (try? c.decode(Bool.self, forKey: Key("deleted"))) ?? false
+        photos = Self.mergedPhotos(list, cover: cover, id: id)
 
         var extras: [String: JSONValue] = [:]
         for key in c.allKeys where !Self.knownKeys.contains(key.stringValue) {
@@ -143,8 +209,9 @@ nonisolated struct Box: Identifiable, Hashable, Sendable, Codable {
         try c.encode(contents, forKey: Key("contents"))
         try c.encode(location, forKey: Key("location"))
         try c.encode(tags, forKey: Key("tags"))
+        try c.encode(photos, forKey: Key("photos"))
         if let photoFilename {
-            try c.encode(photoFilename, forKey: Key("photoFilename"))
+            try c.encode(photoFilename, forKey: Key("photoFilename"))   // always photos[0]
         } else {
             try c.encodeNil(forKey: Key("photoFilename"))   // web app writes null, not absent
         }

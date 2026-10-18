@@ -7,9 +7,12 @@
 //
 //    GET  /api/data?token=…              -> {"items": [...]}
 //    POST /api/data?token=…              {"items": [...]} -> merged {"items": [...]}
-//    GET  /photos/<id>.jpg?token=…       -> JPEG
-//    POST /api/photos/<id>?token=…       {"data": "data:image/jpeg;base64,…"}
-//    POST /api/identify-photo?token=…    {"data": "data:image/jpeg;base64,…"} -> {"items": "…"}
+//    GET  /photos/<name>.jpg?token=…     -> JPEG
+//    POST /api/photos/<name>?token=…     {"data": "data:image/jpeg;base64,…"}
+//    POST /api/identify-photo?token=…    {"photos": ["data:…", …], "data": "data:…"} -> {"items": "…"}
+//
+//  A photo <name> is "<box id>" (a box's original photo) or
+//  "<box id>-<suffix>" (each further one); see Box.newPhotoName.
 //
 //  The token rides in the query string because that is what the server
 //  accepts (a header would have meant a CORS preflight for the web app).
@@ -73,6 +76,7 @@ nonisolated struct StockroomAPI: Sendable {
 
     private nonisolated struct ErrorBody: Decodable { let error: String }
     private nonisolated struct PhotoBody: Encodable { let data: String }
+    private nonisolated struct IdentifyBody: Encodable { let photos: [String]; let data: String }
     private nonisolated struct IdentifyResult: Decodable { let items: String }
 
     // MARK: Endpoints
@@ -90,22 +94,27 @@ nonisolated struct StockroomAPI: Sendable {
         return try decodeItems(try await send(req))
     }
 
-    func uploadPhoto(id: String, jpeg: Data) async throws {
-        var req = request("api/photos/\(id)", method: "POST")
+    /// `filename` is "<key>.jpg"; the endpoint takes the key.
+    func uploadPhoto(filename: String, jpeg: Data) async throws {
+        let key = filename.hasSuffix(".jpg") ? String(filename.dropLast(4)) : filename
+        var req = request("api/photos/\(key)", method: "POST")
         req.httpBody = try JSONEncoder().encode(PhotoBody(data: Self.dataURL(jpeg)))
         req.timeoutInterval = 60
         _ = try await send(req)
     }
 
-    func downloadPhoto(id: String) async throws -> Data {
-        try await send(request("photos/\(id).jpg"))
+    func downloadPhoto(filename: String) async throws -> Data {
+        try await send(request("photos/\(filename)"))
     }
 
-    /// Returns Gemini's suggestion text, one item per line.
-    func identify(jpeg: Data) async throws -> String {
+    /// Returns Gemini's suggestion text, one item per line. All of a box's
+    /// photos go in one request so an item seen twice is named once.
+    func identify(jpegs: [Data]) async throws -> String {
+        let urls = jpegs.map(Self.dataURL)
         var req = request("api/identify-photo", method: "POST")
-        req.httpBody = try JSONEncoder().encode(PhotoBody(data: Self.dataURL(jpeg)))
-        req.timeoutInterval = 60
+        // `data` too, for a server that predates multi-photo boxes.
+        req.httpBody = try JSONEncoder().encode(IdentifyBody(photos: urls, data: urls.first ?? ""))
+        req.timeoutInterval = 90
         let data = try await send(req)
         guard let result = try? JSONDecoder().decode(IdentifyResult.self, from: data) else {
             throw APIError.badResponse

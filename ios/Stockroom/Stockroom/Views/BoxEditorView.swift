@@ -3,10 +3,12 @@
 //  Stockroom
 //
 //  Add or edit a box. Nothing touches the store until Save, so Cancel
-//  really discards — including a photo you just took.
+//  really discards — including photos you just took.
 //
-//  When the sheet is wide (unfolded Duo) the photo sits in its own column beside the
-//  form; folded, it's the first section of the form.
+//  Up to Box.maxPhotos photos per box: a large preview of the selected one,
+//  a strip of all of them (the first is the cover), Make Cover and Remove.
+//  When the sheet is wide (unfolded Duo) the photos sit in their own column
+//  beside the form; folded, they're the first section of the form.
 //
 
 import SwiftUI
@@ -25,13 +27,14 @@ struct BoxEditorView: View {
     let onSaved: (Box) -> Void
 
     @State private var draft: Box
-    /// A photo taken/picked in this session, not yet saved.
-    @State private var newPhoto: Data?
-    @State private var removePhoto = false
+    /// The photos as they will be saved, cover first. Ones taken or picked
+    /// in this edit carry their JPEG; the rest are already on the box.
+    @State private var photos: [EditorPhoto]
+    @State private var selectedPhoto: String?
     @State private var newTag = ""
 
     @State private var showingCamera = false
-    @State private var libraryItem: PhotosPickerItem?
+    @State private var libraryItems: [PhotosPickerItem] = []
     @State private var identifying = false
     @State private var identifyError: String?
     @State private var errorTitle = "Couldn't Identify Items"
@@ -43,6 +46,8 @@ struct BoxEditorView: View {
 
     init(box: Box, isNew: Bool, onSaved: @escaping (Box) -> Void = { _ in }) {
         _draft = State(initialValue: box)
+        _photos = State(initialValue: box.photos.map { EditorPhoto(name: $0) })
+        _selectedPhoto = State(initialValue: box.photos.first)
         self.isNew = isNew
         self.onSaved = onSaved
     }
@@ -81,17 +86,20 @@ struct BoxEditorView: View {
             }
             .interactiveDismissDisabled(hasChanges)
             .fullScreenCover(isPresented: $showingCamera) {
-                CameraPicker { image in setPhoto(image) }
+                CameraPicker { image in addPhoto(image) }
                     .ignoresSafeArea()
             }
-            .onChange(of: libraryItem) { _, item in
-                guard let item else { return }
+            .onChange(of: libraryItems) { _, items in
+                guard !items.isEmpty else { return }
                 Task {
-                    if let data = try? await item.loadTransferable(type: Data.self),
-                       let image = UIImage(data: data) {
-                        setPhoto(image)
+                    for item in items {
+                        guard remainingSlots > 0 else { break }
+                        if let data = try? await item.loadTransferable(type: Data.self),
+                           let image = UIImage(data: data) {
+                            addPhoto(image)
+                        }
                     }
-                    libraryItem = nil
+                    libraryItems = []
                 }
             }
             .alert(errorTitle, isPresented: Binding(
@@ -159,7 +167,7 @@ struct BoxEditorView: View {
             } footer: {
                 if let n = identifiedCount {
                     Text(n == 0 ? "Nothing new found — everything identified was already listed."
-                                : "Added \(n) item\(n == 1 ? "" : "s") from the photo. Review and edit before saving.")
+                                : "Added \(n) item\(n == 1 ? "" : "s") from the photo\(photos.count == 1 ? "" : "s"). Review and edit before saving.")
                 }
             }
 
@@ -208,22 +216,35 @@ struct BoxEditorView: View {
         }
     }
 
-    // MARK: Photo
+    // MARK: Photos
+
+    /// The stored box, whose photos BoxPhotoView can load or download.
+    private var photoSource: Box { original ?? draft }
+
+    private var remainingSlots: Int { Box.maxPhotos - photos.count }
+
+    /// The selected photo's name, falling back to the cover.
+    private var selectedName: String? {
+        if let selectedPhoto, photos.contains(where: { $0.name == selectedPhoto }) { return selectedPhoto }
+        return photos.first?.name
+    }
 
     private var photoPanel: some View {
         VStack(spacing: 12) {
             ZStack {
-                if let image = currentPhotoImage {
-                    Image(uiImage: image)
-                        .resizable()
-                        .scaledToFill()
-                } else if !removePhoto && draft.photoFilename != nil {
-                    BoxPhotoView(box: draft, style: .hero)
+                if let name = selectedName, let photo = photos.first(where: { $0.name == name }) {
+                    if let preview = photo.preview {
+                        Image(uiImage: preview)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        BoxPhotoView(box: photoSource, style: .hero, name: name)
+                    }
                 } else {
                     Rectangle().fill(Color(.tertiarySystemFill))
                     VStack(spacing: 6) {
                         Image(systemName: "camera").font(.largeTitle)
-                        Text("No photo").font(.subheadline)
+                        Text("No photos").font(.subheadline)
                     }
                     .foregroundStyle(.secondary)
                 }
@@ -232,23 +253,69 @@ struct BoxEditorView: View {
             .frame(height: 240)
             .clipShape(.rect(cornerRadius: 16))
 
+            if !photos.isEmpty {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(photos.enumerated()), id: \.element.id) { index, photo in
+                            Button { selectedPhoto = photo.name } label: {
+                                thumbnail(photo)
+                                    .frame(width: 64, height: 64)
+                                    .clipShape(.rect(cornerRadius: 8))
+                                    .overlay {
+                                        RoundedRectangle(cornerRadius: 8)
+                                            .strokeBorder(photo.name == selectedName ? Color.accentColor : .clear, lineWidth: 3)
+                                    }
+                                    .overlay(alignment: .bottomLeading) {
+                                        if index == 0 && photos.count > 1 {
+                                            Text("Cover")
+                                                .font(.caption2.bold())
+                                                .padding(.horizontal, 4)
+                                                .padding(.vertical, 1)
+                                                .background(.ultraThinMaterial, in: .rect(cornerRadius: 4))
+                                                .padding(4)
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Photo \(index + 1)\(index == 0 ? ", cover" : "")")
+                            .accessibilityAddTraits(photo.name == selectedName ? .isSelected : [])
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
+                .scrollIndicators(.hidden)
+            }
+
             HStack {
                 if CameraPicker.isAvailable {
                     Button("Camera", systemImage: "camera") { showingCamera = true }
+                        .disabled(remainingSlots == 0)
                 }
-                PhotosPicker(selection: $libraryItem, matching: .images) {
+                PhotosPicker(selection: $libraryItems, maxSelectionCount: max(1, remainingSlots),
+                             selectionBehavior: .ordered, matching: .images) {
                     Label("Library", systemImage: "photo.on.rectangle")
                 }
-                if hasPhoto {
-                    Button("Remove", systemImage: "trash", role: .destructive) {
-                        newPhoto = nil
-                        removePhoto = true
-                        identifiedCount = nil
-                    }
-                }
+                .disabled(remainingSlots == 0)
             }
             .buttonStyle(.bordered)
             .labelStyle(.titleAndIcon)
+
+            if let name = selectedName {
+                HStack {
+                    if photos.first?.name != name {
+                        Button("Make Cover", systemImage: "star") { makeCover(name) }
+                    }
+                    Button("Remove", systemImage: "trash", role: .destructive) { removePhoto(name) }
+                }
+                .buttonStyle(.bordered)
+                .labelStyle(.titleAndIcon)
+                .controlSize(.small)
+
+                Text(remainingSlots == 0 ? "\(Box.maxPhotos) of \(Box.maxPhotos) photos — the most a box can have"
+                                         : "\(photos.count) of \(Box.maxPhotos) photos")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
 
             Button {
                 Task { await identify() }
@@ -257,40 +324,65 @@ struct BoxEditorView: View {
                     HStack(spacing: 8) { ProgressView(); Text("Identifying…") }
                         .frame(maxWidth: .infinity)
                 } else {
-                    Label("Identify Items in Photo", systemImage: "sparkles")
+                    Label(photos.count > 1 ? "Identify Items in \(photos.count) Photos" : "Identify Items in Photo",
+                          systemImage: "sparkles")
                         .frame(maxWidth: .infinity)
                 }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(!hasPhoto || identifying || !store.isConfigured)
+            .disabled(photos.isEmpty || identifying || !store.isConfigured)
         }
         .padding(.vertical, 4)
     }
 
-    private var hasPhoto: Bool { newPhoto != nil || (!removePhoto && draft.photoFilename != nil) }
+    @ViewBuilder private func thumbnail(_ photo: EditorPhoto) -> some View {
+        if let preview = photo.preview {
+            Image(uiImage: preview).resizable().scaledToFill()
+        } else {
+            BoxPhotoView(box: photoSource, style: .thumbnail, name: photo.name)
+        }
+    }
 
-    private var currentPhotoImage: UIImage? { newPhoto.flatMap(UIImage.init(data:)) }
+    private func addPhoto(_ image: UIImage) {
+        guard remainingSlots > 0, let jpeg = PhotoPrep.jpeg(from: image) else { return }
+        var name = Box.newPhotoName(for: draft.id)
+        while photos.contains(where: { $0.name == name }) { name = Box.newPhotoName(for: draft.id) }
+        photos.append(EditorPhoto(name: name, jpeg: jpeg, preview: EditorPhoto.preview(of: jpeg)))
+        selectedPhoto = name
+        identifiedCount = nil
+    }
 
-    private func setPhoto(_ image: UIImage) {
-        guard let jpeg = PhotoPrep.jpeg(from: image) else { return }
-        newPhoto = jpeg
-        removePhoto = false
+    private func makeCover(_ name: String) {
+        guard let i = photos.firstIndex(where: { $0.name == name }) else { return }
+        photos.insert(photos.remove(at: i), at: 0)
+    }
+
+    private func removePhoto(_ name: String) {
+        guard let i = photos.firstIndex(where: { $0.name == name }) else { return }
+        photos.remove(at: i)
+        selectedPhoto = photos.isEmpty ? nil : photos[min(i, photos.count - 1)].name
         identifiedCount = nil
     }
 
     private func identify() async {
-        let jpeg: Data? = newPhoto ?? store.localPhotoURL(for: draft).flatMap {
-            try? Data(contentsOf: $0)
+        var jpegs: [Data] = []
+        for photo in photos {
+            if let jpeg = photo.jpeg {
+                jpegs.append(jpeg)
+            } else if let url = store.localPhotoURL(for: photoSource, name: photo.name),
+                      let data = try? Data(contentsOf: url) {
+                jpegs.append(data)
+            } else {
+                errorTitle = "Couldn't Identify Items"
+                identifyError = "A photo hasn't finished downloading yet. Try again in a moment."
+                return
+            }
         }
-        guard let jpeg else {
-            errorTitle = "Couldn't Identify Items"
-            identifyError = "The photo hasn't finished downloading yet. Try again in a moment."
-            return
-        }
+        guard !jpegs.isEmpty else { return }
         identifying = true
         defer { identifying = false }
         do {
-            let text = try await store.identifyItems(in: jpeg)
+            let text = try await store.identifyItems(in: jpegs)
             identifiedCount = mergeItems(text)
         } catch {
             errorTitle = "Couldn't Identify Items"
@@ -323,7 +415,7 @@ struct BoxEditorView: View {
     private var original: Box? { isNew ? nil : store.box(id: draft.id) }
 
     private var hasChanges: Bool {
-        newPhoto != nil || removePhoto || original.map { o in
+        photos.map(\.name) != (original?.photos ?? []) || original.map { o in
             o.box != draft.box || o.location != draft.location || o.contents != draft.contents || o.tags != draft.tags
         } ?? (!draft.box.isEmpty || !draft.location.isEmpty || !draft.contents.isEmpty || !draft.tags.isEmpty)
     }
@@ -375,11 +467,9 @@ struct BoxEditorView: View {
         if !newTag.trimmingCharacters(in: .whitespaces).isEmpty { addTag(newTag) }
         var box = draft
         do {
-            if let newPhoto {
-                box = try store.attachPhoto(newPhoto, to: box)
-            } else if removePhoto {
-                box = store.removePhoto(from: box)
-            }
+            var newPhotos: [String: Data] = [:]
+            for photo in photos { if let jpeg = photo.jpeg { newPhotos[photo.name] = jpeg } }
+            box = try store.applyPhotos(photos.map(\.name), newPhotos: newPhotos, to: box)
         } catch {
             errorTitle = "Couldn't Save"
             identifyError = "Couldn't save the photo: \(error.localizedDescription)"
@@ -392,5 +482,24 @@ struct BoxEditorView: View {
         store.save(box)
         onSaved(box)
         dismiss()
+    }
+}
+
+/// One photo in the editor. `jpeg`/`preview` are set only for photos taken
+/// or picked in this edit; saved ones are shown through BoxPhotoView.
+private struct EditorPhoto: Identifiable {
+    let name: String
+    var jpeg: Data?
+    var preview: UIImage?
+    var id: String { name }
+
+    /// Decoded once at a display size, not on every redraw.
+    static func preview(of jpeg: Data) -> UIImage? {
+        guard let image = UIImage(data: jpeg) else { return nil }
+        let longest = max(image.size.width, image.size.height)
+        guard longest > 1200 else { return image }
+        let f = 1200 / longest
+        return image.preparingThumbnail(of: CGSize(width: (image.size.width * f).rounded(),
+                                                   height: (image.size.height * f).rounded())) ?? image
     }
 }

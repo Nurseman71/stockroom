@@ -102,3 +102,57 @@ struct LabelPrintingTests {
         #expect(!QRMatrix.hasFinder(m, atRow: n - 7, col: n - 7))
     }
 }
+
+/// Multiple photos per box (Oct 2026). Same rules as the server's
+/// normalize_photos / photo_belongs_to and the web app's itemPhotos — if
+/// these drift, a phone edit could drop or mis-assign another device's photos.
+struct MultiPhotoTests {
+
+    @Test func legacySinglePhotoDecodesAsAOneItemList() throws {
+        let json = #"{"id":"b_x_aaaaaa","photoFilename":"b_x_aaaaaa.jpg","updatedAt":"2026-01-01T00:00:00.000Z"}"#
+        let box = try JSONDecoder().decode(Box.self, from: Data(json.utf8))
+        #expect(box.photos == ["b_x_aaaaaa.jpg"])
+        #expect(box.photoFilename == "b_x_aaaaaa.jpg")
+    }
+
+    @Test func encodesTheListWithTheCoverAsPhotoFilename() throws {
+        var box = Box.blank()
+        let a = Box.newPhotoName(for: box.id)
+        let b = Box.newPhotoName(for: box.id)
+        box.photos = [b, a]
+        let out = try JSONSerialization.jsonObject(with: JSONEncoder().encode(box)) as! [String: Any]
+        #expect(out["photos"] as? [String] == [b, a])
+        #expect(out["photoFilename"] as? String == b)   // older clients still see the cover
+    }
+
+    @Test func anOlderClientsCoverIsFoldedInFront() throws {
+        let json = #"""
+        {"id":"b_x_aaaaaa","photos":["b_x_aaaaaa-k1.jpg"],"photoFilename":"b_x_aaaaaa.jpg",
+         "updatedAt":"2026-01-01T00:00:00.000Z"}
+        """#
+        let box = try JSONDecoder().decode(Box.self, from: Data(json.utf8))
+        #expect(box.photos == ["b_x_aaaaaa.jpg", "b_x_aaaaaa-k1.jpg"])
+    }
+
+    @Test func foreignDuplicateAndMalformedNamesAreDropped() {
+        var box = Box.blank()
+        let id = box.id
+        box.photos = ["b_other_zzzzzz.jpg", "\(id)-a-b.jpg", "\(id)-ok.jpg", "\(id)-ok.jpg", "../x.jpg", "\(id).png"]
+        #expect(box.photos == ["\(id)-ok.jpg"])
+    }
+
+    @Test func newPhotoNamesMatchTheServersRule() throws {
+        let id = Box.makeID()
+        let pattern = try Regex(#"^[A-Za-z0-9_]{1,64}(-[A-Za-z0-9]{1,16})?\.jpg$"#)
+        for _ in 0..<50 {
+            let name = Box.newPhotoName(for: id)
+            #expect(name.wholeMatch(of: pattern) != nil, "got \(name)")
+            #expect(Box.owns(name, id: id))
+        }
+    }
+
+    @Test func pendingPhotoKeysFromOlderCachesMigrate() {
+        #expect(BoxStore.migratedPhotoKey("b_x_aaaaaa") == "b_x_aaaaaa.jpg")
+        #expect(BoxStore.migratedPhotoKey("b_x_aaaaaa-k1.jpg") == "b_x_aaaaaa-k1.jpg")
+    }
+}

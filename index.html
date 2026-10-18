@@ -282,6 +282,14 @@
   }
   .card .photo-wrap img{ width:100%; height:100%; object-fit:cover; display:block; }
   .card .photo-wrap .no-photo{ color:var(--muted); font-size:12px; font-family:'IBM Plex Mono', monospace; }
+  .card .photo-wrap .photo-count{
+    position:absolute; right:8px; bottom:8px;
+    font-family:'IBM Plex Mono', monospace; font-size:11px;
+    color:var(--paper); background:rgba(28,31,38,0.82);
+    border:1px solid var(--line); border-radius:3px;
+    padding:2px 7px;
+    pointer-events:none;
+  }
 
   .stamp-num{
     position:absolute;
@@ -386,6 +394,20 @@
     max-width:94vw;
   }
   .lightbox-close{ cursor:pointer; }
+  .lightbox-stage{ display:flex; align-items:center; justify-content:center; gap:10px; max-width:100%; }
+  .lightbox-nav{
+    flex:0 0 auto;
+    width:44px; height:44px;          /* iOS minimum touch target */
+    font-size:26px; line-height:1;
+    padding:0;
+    cursor:pointer;
+  }
+  .lightbox-nav[hidden]{ display:none; }
+  @media (max-width:600px){
+    /* On a phone the arrows would squeeze the photo; swipe instead. */
+    .lightbox-stage .lightbox-nav{ display:none; }
+    .lightbox img{ max-width:94vw; }
+  }
   .card .photo-wrap.has-photo{ cursor:zoom-in; }
   /* The global focus-visible rule only covers button/.btn/inputs, and
      this is a div acting as a control -- it needs its own ring or it is
@@ -477,14 +499,32 @@
     cursor:pointer;
   }
   .suggestion-item:hover, .suggestion-item.active{ background:var(--steel-dim); }
-  .photo-input-row{ display:flex; align-items:center; gap:12px; }
-  .photo-preview{
-    width:64px; height:48px;
+  .photo-input-row{ display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .photo-count-note{ color:var(--muted); font-weight:400; }
+  .photo-strip{ display:flex; flex-wrap:wrap; gap:8px; }
+  .photo-strip:empty{ display:none; }
+  .photo-thumb{
+    position:relative;
+    width:96px; height:72px;
     background:var(--ink);
     border:1px solid var(--line);
     border-radius:3px;
-    object-fit:cover;
-    display:none;
+    overflow:hidden;
+  }
+  .photo-thumb.is-cover{ border-color:var(--steel); }
+  .photo-thumb img{ width:100%; height:100%; object-fit:cover; display:block; cursor:zoom-in; }
+  .photo-thumb .cover-badge{
+    position:absolute; left:3px; bottom:3px;
+    font-family:'IBM Plex Mono', monospace; font-size:10px;
+    color:var(--paper); background:var(--steel-dim);
+    border-radius:2px; padding:1px 4px;
+    pointer-events:none;
+  }
+  .photo-thumb .thumb-actions{ position:absolute; top:3px; right:3px; display:flex; gap:3px; }
+  .photo-thumb .thumb-actions button{
+    width:28px; height:28px; padding:0;
+    font-size:13px; line-height:1;
+    background:rgba(28,31,38,0.85);
   }
   .modal-footer{
     display:flex;
@@ -707,7 +747,11 @@
 
 <!-- Photo lightbox -->
 <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-label="Box photo">
-  <img id="lightboxImg" alt="">
+  <div class="lightbox-stage">
+    <button type="button" class="lightbox-nav" id="lightboxPrev" aria-label="Previous photo">&lsaquo;</button>
+    <img id="lightboxImg" alt="">
+    <button type="button" class="lightbox-nav" id="lightboxNext" aria-label="Next photo">&rsaquo;</button>
+  </div>
   <div class="lightbox-caption" id="lightboxCaption"></div>
   <button type="button" class="lightbox-close" id="lightboxClose">Close</button>
 </div>
@@ -737,10 +781,12 @@
       <input type="text" id="fTags" placeholder="comma, separated, tags">
     </div>
     <div class="field">
-      <label for="fPhoto">Photo</label>
-      <div class="photo-input-row">
-        <input type="file" id="fPhoto" accept="image/*">
-        <img id="photoPreview" class="photo-preview">
+      <label for="photoAddBtn">Photos <span class="photo-count-note" id="photoCountNote"></span></label>
+      <div class="photo-strip" id="photoStrip"></div>
+      <div class="photo-input-row" style="margin-top:8px;">
+        <button type="button" id="photoAddBtn">+ Add photos</button>
+        <input type="file" id="fPhoto" accept="image/*" multiple style="display:none;">
+        <span class="field-note" id="photoNote" style="margin:0;"></span>
       </div>
       <div class="photo-input-row" style="margin-top:8px;">
         <button type="button" id="identifyPhotoBtn" style="display:none;">✨ Identify items</button>
@@ -808,7 +854,14 @@
   const LS_PHOTO_QUEUE_KEY = 'stockroom_photo_queue_v1';
   let items = [];
   let editingId = null;
-  let editingPhotoFilename = null;
+  // The id a NEW box will get, fixed when the editor opens so photos
+  // added before the first save can already be named after it.
+  let draftId = null;
+  // Photos shown in the editor, cover first: {name, src, data?}. `data`
+  // (a JPEG data URL) is set only for photos picked in this edit and not
+  // yet saved; Cancel simply discards the array.
+  let editPhotos = [];
+  const MAX_PHOTOS_PER_BOX = 6;
   let autoSyncTimer = null;
   let selectedTags = new Set();
   let highlightId = null;
@@ -905,24 +958,77 @@
     catch(e){ return []; }
   }
   function savePhotoQueue(queue){
-    localStorage.setItem(LS_PHOTO_QUEUE_KEY, JSON.stringify(queue));
+    return trySetItem(LS_PHOTO_QUEUE_KEY, JSON.stringify(queue));
   }
-  function photoSrc(item){
-    if(!item) return null;
-    const cache = loadPhotoCache();
-    if(cache[item.id]) return cache[item.id];
-    if(item.photoFilename && getServerUrl()){
+
+  // ---------- Multiple photos per box (Oct 2026) ----------
+  // `item.photos` lists a box's photo FILENAMES, cover first, and
+  // `photoFilename` mirrors photos[0] so older clients (the GitHub Pages
+  // copy, an older iPhone build) still show the cover. A box's original
+  // photo is "<id>.jpg"; every photo added since is "<id>-<suffix>.jpg",
+  // a name used exactly once -- so a cached image can never go stale.
+  // The photo cache and upload queue are keyed by filename.
+  function itemPhotos(item){
+    if(!item) return [];
+    const names = Array.isArray(item.photos) ? item.photos.filter(n => typeof n === 'string') : [];
+    // An older client that only knows photoFilename may have set it.
+    if(item.photoFilename && !names.includes(item.photoFilename)) names.unshift(item.photoFilename);
+    return names;
+  }
+  function newPhotoName(boxId){
+    const suffix = Date.now().toString(36).slice(-5) + Math.random().toString(36).slice(2, 6);
+    return `${boxId}-${suffix}.jpg`;
+  }
+  function photoUrl(item, name, cache){
+    cache = cache || loadPhotoCache();
+    if(cache[name]) return cache[name];
+    if(pendingUploads.has(name)) return pendingUploads.get(name);
+    if(getServerUrl()){
       const token = encodeURIComponent(getSyncToken());
-      // Cache-buster. The photo filename is deterministic (<id>.jpg), so
-      // replacing a box's photo produces a byte-different image at an
-      // IDENTICAL URL -- and the server serves it with max-age=86400.
-      // Without this, every other device kept showing the OLD photo for
-      // a full day. `updatedAt` changes on every save, so a replaced
-      // photo always lands on a fresh URL.
+      // Cache-buster. A legacy "<id>.jpg" can be REPLACED by an older
+      // client at an identical URL, and the server serves photos with
+      // max-age=86400 -- without this, other devices showed the old
+      // photo for a day. `updatedAt` changes on every save.
       const v = encodeURIComponent(item.updatedAt || '');
-      return `${getServerUrl()}/photos/${item.photoFilename}?token=${token}&v=${v}`;
+      return `${getServerUrl()}/photos/${encodeURIComponent(name)}?token=${token}&v=${v}`;
     }
     return null;
+  }
+  function photoSrcs(item){
+    const cache = loadPhotoCache();
+    return itemPhotos(item).map(n => photoUrl(item, n, cache)).filter(Boolean);
+  }
+  function photoSrc(item){
+    return photoSrcs(item)[0] || null;
+  }
+
+  // One-time migration from one-photo-per-box: the cache and queue were
+  // keyed by box id (whose photo was always "<id>.jpg"). Cached photos
+  // that are NOT waiting to upload are already safe on the server, so
+  // they are dropped here -- that is what frees browser storage, which
+  // used to fill at ~25-30 boxes (see uploadQueuedPhotos for the same
+  // eviction on every later upload).
+  function migratePhotoStore(){
+    const cache = loadPhotoCache();
+    const queue = loadPhotoQueue();
+    let changed = false;
+    const newQueue = queue.map(k => {
+      if(k.endsWith('.jpg')) return k;
+      changed = true;
+      return k + '.jpg';
+    });
+    const queued = new Set(newQueue);
+    const newCache = {};
+    for(const [k, v] of Object.entries(cache)){
+      const name = k.endsWith('.jpg') ? k : k + '.jpg';
+      if(name !== k) changed = true;
+      if(queued.has(name)) newCache[name] = v;
+      else changed = true;
+    }
+    if(changed){
+      savePhotoQueue(newQueue);
+      savePhotoCache(newCache);
+    }
   }
 
   function parseTags(str){
@@ -1084,12 +1190,14 @@
     // line-clamp would cut mid-item and make the number a lie.
     const lines = contentLines(item);
     const hiddenCount = Math.max(0, lines.length - CONTENTS_CLAMP);
+    const photoCount = itemPhotos(item).length;
     // The photo well opens the lightbox, so it is a control, not
     // decoration: it carries a role, a tab stop and a label, or it is
     // simply unreachable without a mouse.
     return `<div class="card${selectMode && selectedIds.has(item.id) ? ' selected' : ''}">
-        <div class="photo-wrap${src ? ' has-photo' : ''}"${src ? ` data-photo="${item.id}" role="button" tabindex="0" aria-label="View photo of box ${escapeHtml(item.box || '?')}"` : ''}>
+        <div class="photo-wrap${src ? ' has-photo' : ''}"${src ? ` data-photo="${item.id}" role="button" tabindex="0" aria-label="View photo${photoCount > 1 ? 's' : ''} of box ${escapeHtml(item.box || '?')}"` : ''}>
           ${src ? `<img src="${src}" alt="Box ${escapeHtml(item.box)} contents" loading="lazy">` : `<span class="no-photo">no photo</span>`}
+          ${src && photoCount > 1 ? `<span class="photo-count">${photoCount} photos</span>` : ''}
           <div class="stamp-num">#${escapeHtml(item.box || '?')}</div>
         </div>
         <div class="card-body">
@@ -1151,17 +1259,36 @@
   const lightboxImg = document.getElementById('lightboxImg');
   const lightboxCaption = document.getElementById('lightboxCaption');
   const lightboxClose = document.getElementById('lightboxClose');
+  const lightboxPrev = document.getElementById('lightboxPrev');
+  const lightboxNext = document.getElementById('lightboxNext');
   let lightboxReturnFocus = null;
+  // What the lightbox is paging through: a list of image sources (a box's
+  // saved photos, or the editor's unsaved ones) and the caption base.
+  let lbSrcs = [];
+  let lbIndex = 0;
+  let lbCaption = '';
+  let lbAlt = 'Box photo';
 
-  function openLightbox(id, srcOverride){
-    const item = items.find(i => i.id === id);
-    const src = srcOverride || photoSrc(item);
-    if(!src) return;
-    lightboxImg.src = src;
-    lightboxImg.alt = item ? `Box ${item.box} contents` : 'Box photo';
-    lightboxCaption.textContent = item
-      ? ['#' + (item.box || '?'), item.location].filter(Boolean).join('  ·  ')
-      : '';
+  function showLightboxPhoto(){
+    const n = lbSrcs.length;
+    lightboxImg.src = lbSrcs[lbIndex];
+    lightboxImg.alt = n > 1 ? `${lbAlt} (${lbIndex + 1} of ${n})` : lbAlt;
+    lightboxCaption.textContent = [lbCaption, n > 1 ? `${lbIndex + 1} / ${n}` : '']
+      .filter(Boolean).join('  ·  ');
+    lightboxPrev.hidden = lightboxNext.hidden = n <= 1;
+  }
+  function stepLightbox(delta){
+    if(lbSrcs.length <= 1) return;
+    lbIndex = (lbIndex + delta + lbSrcs.length) % lbSrcs.length;
+    showLightboxPhoto();
+  }
+  function openLightboxWith(srcs, index, caption, alt){
+    if(!srcs.length) return;
+    lbSrcs = srcs;
+    lbIndex = Math.min(Math.max(0, index || 0), srcs.length - 1);
+    lbCaption = caption || '';
+    lbAlt = alt || 'Box photo';
+    showLightboxPhoto();
     // Remember where focus came from BEFORE moving it, so closing can
     // put the keyboard back on the card that was opened rather than
     // dumping the user at the top of the document.
@@ -1169,6 +1296,33 @@
     lightbox.classList.add('open');
     lightboxClose.focus();
   }
+  function openLightbox(id, index){
+    const item = items.find(i => i.id === id);
+    if(!item) return;
+    openLightboxWith(
+      photoSrcs(item), index || 0,
+      ['#' + (item.box || '?'), item.location].filter(Boolean).join('  ·  '),
+      `Box ${item.box} contents`);
+  }
+  lightboxPrev.addEventListener('click', ()=> stepLightbox(-1));
+  lightboxNext.addEventListener('click', ()=> stepLightbox(1));
+  // Swipe on touch screens. A swipe that starts on the dark backdrop is
+  // followed by a synthetic click there, which would close the lightbox
+  // -- so remember that the gesture was a swipe and ignore that click.
+  let lbTouchX = null, lbSwiped = false;
+  lightbox.addEventListener('touchstart', (e)=>{
+    lbTouchX = e.touches.length === 1 ? e.touches[0].clientX : null;
+    lbSwiped = false;
+  }, {passive:true});
+  lightbox.addEventListener('touchend', (e)=>{
+    if(lbTouchX === null) return;
+    const dx = e.changedTouches[0].clientX - lbTouchX;
+    lbTouchX = null;
+    if(Math.abs(dx) > 40 && lbSrcs.length > 1){
+      lbSwiped = true;
+      stepLightbox(dx < 0 ? 1 : -1);
+    }
+  });
   function closeLightbox(){
     lightbox.classList.remove('open');
     // Drop the reference so a large data URL isn't pinned in the DOM.
@@ -1182,13 +1336,25 @@
     lightboxReturnFocus = null;
   }
   lightbox.addEventListener('keydown', (e)=>{
-    // Close is the only focusable element in here, so Tab has nowhere
-    // legitimate to go -- without this it walks the page behind the
-    // overlay, which is the classic aria-modal lie.
-    if(e.key === 'Tab'){ e.preventDefault(); lightboxClose.focus(); }
+    if(e.key === 'ArrowLeft'){ e.preventDefault(); stepLightbox(-1); return; }
+    if(e.key === 'ArrowRight'){ e.preventDefault(); stepLightbox(1); return; }
+    // Keep Tab inside the dialog -- without this it walks the page
+    // behind the overlay, which is the classic aria-modal lie.
+    if(e.key === 'Tab'){
+      e.preventDefault();
+      const stops = [lightboxPrev, lightboxNext, lightboxClose]
+        .filter(b => !b.hidden && b.offsetParent !== null);
+      const at = stops.indexOf(document.activeElement);
+      const next = (at + (e.shiftKey ? -1 : 1) + stops.length) % stops.length;
+      stops[next].focus();
+    }
   });
-  // Clicking the backdrop closes; clicking the photo itself does not.
-  lightbox.addEventListener('click', (e)=>{ if(e.target !== lightboxImg) closeLightbox(); });
+  // Clicking the backdrop (or Close) closes; the photo and arrows do not.
+  lightbox.addEventListener('click', (e)=>{
+    if(lbSwiped){ lbSwiped = false; return; }
+    if(e.target === lightboxImg || e.target.closest('.lightbox-nav')) return;
+    closeLightbox();
+  });
 
   // ---------- Modal ----------
   const modalOverlay = document.getElementById('modalOverlay');
@@ -1198,13 +1364,15 @@
   const fLocation = document.getElementById('fLocation');
   const fTags = document.getElementById('fTags');
   const fPhoto = document.getElementById('fPhoto');
-  const photoPreview = document.getElementById('photoPreview');
+  const photoStrip = document.getElementById('photoStrip');
+  const photoAddBtn = document.getElementById('photoAddBtn');
+  const photoNote = document.getElementById('photoNote');
+  const photoCountNote = document.getElementById('photoCountNote');
   const deleteBtn = document.getElementById('deleteBtn');
   const printLabelBtn = document.getElementById('printLabelBtn');
   const identifyPhotoBtn = document.getElementById('identifyPhotoBtn');
   const identifyStatus = document.getElementById('identifyStatus');
   const locationSuggestions = document.getElementById('locationSuggestions');
-  let pendingPhotoData = null;
   let allLocations = [];
 
   const boxNote = document.getElementById('boxNote');
@@ -1247,10 +1415,45 @@
   fLocation.addEventListener('input', updateBoxNote);
 
   function updateIdentifyBtnVisibility(){
-    const hasPhoto = !!pendingPhotoData || photoPreview.style.display === 'block';
+    const hasPhoto = editPhotos.length > 0;
     identifyPhotoBtn.style.display = hasPhoto ? 'inline-block' : 'none';
     if(!hasPhoto) identifyStatus.textContent = '';
   }
+
+  function renderPhotoStrip(){
+    const n = editPhotos.length;
+    photoStrip.innerHTML = editPhotos.map((p, i) => `
+      <div class="photo-thumb${i === 0 ? ' is-cover' : ''}">
+        <img src="${escapeHtml(p.src || '')}" alt="Photo ${i + 1}${i === 0 ? ' (cover)' : ''}" data-view="${i}">
+        ${i === 0 && n > 1 ? '<span class="cover-badge">Cover</span>' : ''}
+        <div class="thumb-actions">
+          ${i > 0 ? `<button type="button" data-cover="${i}" title="Make cover" aria-label="Make photo ${i + 1} the cover">&#9733;</button>` : ''}
+          <button type="button" data-remove="${i}" title="Remove" aria-label="Remove photo ${i + 1}">&#10005;</button>
+        </div>
+      </div>`).join('');
+    photoCountNote.textContent = n ? `(${n} of ${MAX_PHOTOS_PER_BOX})` : '';
+    photoAddBtn.disabled = n >= MAX_PHOTOS_PER_BOX;
+    photoAddBtn.textContent = n ? '+ Add more' : '+ Add photos';
+    updateIdentifyBtnVisibility();
+  }
+  photoStrip.addEventListener('click', (e)=>{
+    const view = e.target.closest('[data-view]');
+    const cover = e.target.closest('[data-cover]');
+    const remove = e.target.closest('[data-remove]');
+    if(cover){
+      const [p] = editPhotos.splice(Number(cover.dataset.cover), 1);
+      editPhotos.unshift(p);
+      renderPhotoStrip();
+    } else if(remove){
+      editPhotos.splice(Number(remove.dataset.remove), 1);
+      photoNote.textContent = '';
+      renderPhotoStrip();
+    } else if(view){
+      const item = items.find(i => i.id === editingId);
+      openLightboxWith(editPhotos.map(p => p.src).filter(Boolean), Number(view.dataset.view),
+        item ? '#' + (item.box || '?') : (fBox.value.trim() ? '#' + fBox.value.trim() : 'New box'));
+    }
+  });
 
   function refreshLocationList(){
     // Deduplicated the same way the headings are, so the dropdown can't
@@ -1300,8 +1503,10 @@
 
   function openModal(id){
     editingId = id || null;
-    pendingPhotoData = null;
-    editingPhotoFilename = null;
+    draftId = editingId || uid();
+    editPhotos = [];
+    photoNote.textContent = '';
+    identifyStatus.textContent = '';
     fPhoto.value = '';
     refreshLocationList();
     if(editingId){
@@ -1311,24 +1516,17 @@
       fContents.value = item.contents || '';
       fLocation.value = item.location || '';
       fTags.value = (item.tags||[]).join(', ');
-      editingPhotoFilename = item.photoFilename || null;
-      const src = photoSrc(item);
-      if(src){
-        photoPreview.src = src;
-        photoPreview.style.display = 'block';
-      } else {
-        photoPreview.style.display = 'none';
-      }
+      const cache = loadPhotoCache();
+      editPhotos = itemPhotos(item).map(name => ({ name, src: photoUrl(item, name, cache) }));
       deleteBtn.style.display = 'inline-block';
       printLabelBtn.style.display = 'inline-block';
     } else {
       modalTitle.textContent = 'Add box';
       fBox.value = ''; fContents.value = ''; fLocation.value = ''; fTags.value = '';
-      photoPreview.style.display = 'none';
       deleteBtn.style.display = 'none';
       printLabelBtn.style.display = 'none';
     }
-    updateIdentifyBtnVisibility();
+    renderPhotoStrip();
     updateBoxNote();
     modalOverlay.classList.add('open');
     autoResizeContents();
@@ -1353,58 +1551,71 @@
     closeSettings();
   });
 
-  // The edit modal's preview is 64x48 -- too small to check a photo
-  // against a box. Tapping it opens the same lightbox, including for a
-  // photo just picked and not yet saved.
-  photoPreview.style.cursor = 'zoom-in';
-  photoPreview.addEventListener('click', ()=>{
-    if(photoPreview.style.display !== 'block' || !photoPreview.src) return;
-    openLightbox(editingId, photoPreview.src);
-  });
+  photoAddBtn.addEventListener('click', ()=> fPhoto.click());
 
-  fPhoto.addEventListener('change', ()=>{
-    const file = fPhoto.files[0];
-    if(!file) return;
-    const reader = new FileReader();
-    reader.onload = (e)=>{
-      const img = new Image();
-      img.onload = ()=>{
-        const maxW = 900;
-        const scale = Math.min(1, maxW / img.width);
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        pendingPhotoData = canvas.toDataURL('image/jpeg', 0.62);
-        photoPreview.src = pendingPhotoData;
-        photoPreview.style.display = 'block';
-        updateIdentifyBtnVisibility();
+  // Downscale to 900px wide, JPEG q0.62 -- 75-210 KB per photo. Re-encoding
+  // through a canvas also strips EXIF, including GPS.
+  function compressPhoto(file){
+    return new Promise((resolve, reject)=>{
+      const reader = new FileReader();
+      reader.onerror = reject;
+      reader.onload = (e)=>{
+        const img = new Image();
+        img.onerror = reject;
+        img.onload = ()=>{
+          const maxW = 900;
+          const scale = Math.min(1, maxW / img.width);
+          const canvas = document.createElement('canvas');
+          canvas.width = img.width * scale;
+          canvas.height = img.height * scale;
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.62));
+        };
+        img.src = e.target.result;
       };
-      img.src = e.target.result;
-    };
-    reader.readAsDataURL(file);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  fPhoto.addEventListener('change', async ()=>{
+    const files = [...fPhoto.files];
+    fPhoto.value = '';   // so picking the same file again still fires
+    if(!files.length) return;
+    const room = MAX_PHOTOS_PER_BOX - editPhotos.length;
+    const take = files.slice(0, Math.max(0, room));
+    const skipped = files.length - take.length;
+    const openedFor = draftId;
+    let failed = 0;
+    for(const file of take){
+      try{
+        const data = await compressPhoto(file);
+        // The editor may have been closed or reopened on another box
+        // while a large photo was still being processed.
+        if(draftId !== openedFor || editPhotos.length >= MAX_PHOTOS_PER_BOX) return;
+        editPhotos.push({ name: newPhotoName(draftId), src: data, data });
+        renderPhotoStrip();
+      }catch(e){
+        failed++;
+      }
+    }
+    const notes = [];
+    if(skipped) notes.push(`Only ${MAX_PHOTOS_PER_BOX} photos per box — ${skipped} not added.`);
+    if(failed) notes.push(`${failed} photo${failed === 1 ? '' : 's'} couldn't be read.`);
+    photoNote.textContent = notes.join(' ');
   });
 
-  async function currentPhotoAsDataUrl(){
-    // A freshly-picked photo is already a data URL in memory.
-    if(pendingPhotoData) return pendingPhotoData;
-    // Otherwise use whatever's showing in the preview — already a data
-    // URL if it came from the local photo cache, or a server URL if this
-    // device never cached it. Either way, fetch+convert so the identify
-    // endpoint always gets a data URL to work with.
-    if(photoPreview.style.display === 'block' && photoPreview.src){
-      if(photoPreview.src.startsWith('data:')) return photoPreview.src;
-      const res = await fetch(photoPreview.src);
-      const blob = await res.blob();
-      return await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result);
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    }
-    return null;
+  async function srcAsDataUrl(src){
+    if(!src) return null;
+    if(src.startsWith('data:')) return src;
+    const res = await fetch(src);
+    if(!res.ok) throw new Error('photo fetch failed');
+    const blob = await res.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
   }
 
   identifyPhotoBtn.addEventListener('click', async ()=>{
@@ -1418,25 +1629,42 @@
     identifyPhotoBtn.textContent = '✨ Identifying…';
     identifyStatus.textContent = '';
     try{
-      const dataUrl = await currentPhotoAsDataUrl();
-      if(!dataUrl){
+      // Every photo goes in ONE request, so Gemini can name an item once
+      // even when it shows up in several shots of the same box.
+      const dataUrls = (await Promise.all(editPhotos.map(p => p.data || srcAsDataUrl(p.src))))
+        .filter(Boolean);
+      if(!dataUrls.length){
         identifyStatus.textContent = 'No photo to identify yet.';
         return;
       }
       const res = await fetch(`${url}/api/identify-photo?token=${encodeURIComponent(token)}`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({data: dataUrl})
+        // `data` too, for a server that predates multi-photo boxes.
+        body: JSON.stringify({photos: dataUrls, data: dataUrls[0]})
       });
       const result = await res.json();
       if(!res.ok){
         identifyStatus.textContent = result.error || 'Identify failed.';
         return;
       }
-      const existing = fContents.value.trim();
-      fContents.value = existing ? `${existing}\n${result.items}` : result.items;
-      autoResizeContents();
-      identifyStatus.textContent = 'Added to Contents — review before saving.';
+      // Add only items not already listed, so running Identify again
+      // after adding another photo doesn't duplicate the list.
+      const have = new Set(fContents.value.split('\n').map(l => l.trim().toLowerCase()).filter(Boolean));
+      const fresh = [];
+      for(const line of String(result.items || '').split('\n')){
+        const t = line.trim();
+        if(t && !have.has(t.toLowerCase())){ have.add(t.toLowerCase()); fresh.push(t); }
+      }
+      if(fresh.length){
+        const existing = fContents.value.trim();
+        fContents.value = existing ? `${existing}\n${fresh.join('\n')}` : fresh.join('\n');
+        autoResizeContents();
+      }
+      const from = dataUrls.length > 1 ? ` from ${dataUrls.length} photos` : '';
+      identifyStatus.textContent = fresh.length
+        ? `Added ${fresh.length} item${fresh.length === 1 ? '' : 's'}${from} — review before saving.`
+        : `No new items found${from}.`;
     }catch(e){
       identifyStatus.textContent = 'Identify failed — check your connection.';
     }finally{
@@ -1448,39 +1676,48 @@
   document.getElementById('saveBtn').addEventListener('click', ()=>{
     const box = fBox.value.trim();
     if(!box){ fBox.focus(); return; }
-    const id = editingId || uid();
+    const id = editingId || draftId;
 
-    let photoFilename;
-    if(pendingPhotoData){
-      // A new photo was chosen: cache it locally (so this device can
-      // render it immediately) and queue it for upload — the actual
-      // transfer happens in the background during the next sync,
-      // separately from the lightweight metadata sync.
-      photoFilename = id + '.jpg';
-      const cache = loadPhotoCache();
-      cache[id] = pendingPhotoData;
-      if(!savePhotoCache(cache)){
-        // No room to cache it on disk. Hold it in memory so the upload
-        // still happens, and warn -- but never abort the box save.
-        pendingUploads.set(id, pendingPhotoData);
-        storageWarning('Photo could not be cached in this browser (storage full) — it will still upload on the next sync.', false);
-      }
-      const queue = loadPhotoQueue();
-      if(!queue.includes(id)){
-        queue.push(id);
-        savePhotoQueue(queue);
-      }
-    } else {
-      // No new photo chosen this time — keep whatever was already there.
-      photoFilename = editingPhotoFilename || null;
+    // New photos are cached locally (so this device can render them
+    // immediately) and queued for upload -- the transfer happens in the
+    // background after the next metadata sync, which then evicts them
+    // from the cache. Photos removed in this edit that never reached the
+    // server are dropped from the cache and queue; ones already on the
+    // server are moved aside there (photos/removed/) and kept 30 days.
+    const names = editPhotos.map(p => p.name);
+    const before = editingId ? itemPhotos(items.find(i => i.id === editingId)) : [];
+    const cache = loadPhotoCache();
+    let queue = loadPhotoQueue();
+    let cacheChanged = false;
+    for(const n of before){
+      if(names.includes(n)) continue;
+      if(cache[n]){ delete cache[n]; cacheChanged = true; }
+      queue = queue.filter(q => q !== n);
+      pendingUploads.delete(n);
     }
+    const added = editPhotos.filter(p => p.data);
+    for(const p of added){
+      cache[p.name] = p.data;
+      cacheChanged = true;
+      if(!queue.includes(p.name)) queue.push(p.name);
+    }
+    if(cacheChanged && !savePhotoCache(cache)){
+      // No room to cache them on disk. Hold them in memory so the upload
+      // still happens, and warn -- but never abort the box save.
+      for(const p of added) pendingUploads.set(p.name, p.data);
+      if(added.length){
+        storageWarning('Photos could not be cached in this browser (storage full) — they will still upload on the next sync.', false);
+      }
+    }
+    savePhotoQueue(queue);
 
     const payload = {
       box,
       contents: fContents.value.trim(),
       location: fLocation.value.trim(),
       tags: parseTags(fTags.value),
-      photoFilename,
+      photos: names,
+      photoFilename: names[0] || null,
       updatedAt: new Date().toISOString()
     };
     if(editingId){
@@ -1509,6 +1746,7 @@
     if(!editingId) return;
     if(!confirm('Delete this box entry? This cannot be undone.')) return;
     const idx = items.findIndex(i=>i.id===editingId);
+    const doomed = idx !== -1 ? itemPhotos(items[idx]) : [];
     if(idx !== -1){
       // Soft-delete: keep a tombstone so the deletion can travel through
       // sync (a removed-from-array item looks identical to "never told
@@ -1520,12 +1758,13 @@
     // Free the local photo cache and drop it from the upload queue —
     // no point uploading a photo for a box that's about to disappear.
     const cache = loadPhotoCache();
-    if(cache[editingId]){
-      delete cache[editingId];
-      savePhotoCache(cache);
+    let cacheChanged = false;
+    for(const n of doomed){
+      if(cache[n]){ delete cache[n]; cacheChanged = true; }
+      pendingUploads.delete(n);
     }
-    const queue = loadPhotoQueue().filter(qid => qid !== editingId);
-    savePhotoQueue(queue);
+    if(cacheChanged) savePhotoCache(cache);
+    savePhotoQueue(loadPhotoQueue().filter(q => !doomed.includes(q)));
     saveLocal();
     render();
     closeModal();
@@ -1912,27 +2151,36 @@
     if(!queue.length) return;
     const cache = loadPhotoCache();
     const stillQueued = [];
-    for(const id of queue){
-      const item = items.find(i => i.id === id);
-      const dataUrl = cache[id] || pendingUploads.get(id);
+    let evicted = false;
+    for(const name of queue){
+      const item = items.find(i => itemPhotos(i).includes(name));
+      const dataUrl = cache[name] || pendingUploads.get(name);
       if(!item || item.deleted || !dataUrl){
-        continue; // nothing to upload — drop it from the queue
+        // Nothing to upload (photo removed, box deleted) — drop it.
+        if(cache[name]){ delete cache[name]; evicted = true; }
+        continue;
       }
       try{
-        const res = await fetch(`${url}/api/photos/${encodeURIComponent(id)}?${tokenParam}`, {
+        const key = name.replace(/\.jpg$/, '');
+        const res = await fetch(`${url}/api/photos/${encodeURIComponent(key)}?${tokenParam}`, {
           method: 'POST',
           headers: {'Content-Type': 'application/json'},
           body: JSON.stringify({data: dataUrl})
         });
         if(res.ok){
-          pendingUploads.delete(id); // safely on the server now
+          // Safely on the server now: evict the local copy and render it
+          // from the server URL instead. This is what keeps browser
+          // storage from filling up (it used to at ~25-30 boxes).
+          pendingUploads.delete(name);
+          if(cache[name]){ delete cache[name]; evicted = true; }
         } else {
-          stillQueued.push(id); // leave it for next time
+          stillQueued.push(name); // leave it for next time
         }
       }catch(e){
-        stillQueued.push(id); // offline or network hiccup — retry later
+        stillQueued.push(name); // offline or network hiccup — retry later
       }
     }
+    if(evicted) savePhotoCache(cache);
     savePhotoQueue(stillQueued);
   }
 
@@ -2002,6 +2250,7 @@
   }
 
   loadLocal();
+  migratePhotoStore();
   const boxIdParam = new URLSearchParams(location.search).get('boxid');
   if(boxIdParam) highlightId = boxIdParam;
   updateSyncStatusLabel();

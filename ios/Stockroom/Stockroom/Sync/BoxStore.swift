@@ -11,8 +11,10 @@
 //  (deleted: true), never removals, so a delete made offline still wins
 //  against an older copy on the server.
 //
-//  Photos are plain files in Application Support, so unlike the web app's
-//  localStorage cache there is no ~25–30 box ceiling.
+//  Photos are plain files in Application Support, one per filename
+//  (Photos/<name>, e.g. "<id>.jpg" or "<id>-<suffix>.jpg"), up to
+//  Box.maxPhotos per box. Unlike the web app's old localStorage cache
+//  there is no box ceiling.
 //
 
 import Foundation
@@ -36,8 +38,8 @@ final class BoxStore {
     private(set) var lastSynced: Date?
     /// Box ids edited on this phone and not yet confirmed by the server.
     private(set) var pendingIDs: Set<String> = []
-    /// Photos taken on this phone and not yet uploaded.
-    private(set) var pendingPhotoIDs: Set<String> = []
+    /// Photo filenames taken on this phone and not yet uploaded.
+    private(set) var pendingPhotos: Set<String> = []
     /// Per-box counter, bumped when that box's photo file changes, so only
     /// the views showing that photo reload (a single global counter made
     /// every row restart — and cancel — its download whenever any finished).
@@ -47,13 +49,13 @@ final class BoxStore {
     private(set) var hasToken: Bool
 
     var visibleBoxes: [Box] { boxes.filter { !$0.deleted } }
-    var hasUnsyncedChanges: Bool { !pendingIDs.isEmpty || !pendingPhotoIDs.isEmpty }
+    var hasUnsyncedChanges: Bool { !pendingIDs.isEmpty || !pendingPhotos.isEmpty }
     var isConfigured: Bool { isPreview || config != nil }
 
     // MARK: Private
 
-    private var photoVersions: [String: String] = [:]   // id -> box.updatedAt the local photo file matches
-    private var downloadsInFlight: Set<String> = []
+    private var photoVersions: [String: String] = [:]   // filename -> box.updatedAt the local file matches
+    private var downloadsInFlight: Set<String> = []     // filenames
     private var isSyncing = false
     private var syncRequestedDuringFlight = false
 
@@ -150,56 +152,61 @@ final class BoxStore {
         boxes.first { $0.id == id && !$0.deleted }
     }
 
-    /// Stores a JPEG for `box` and queues the upload. Returns the box with
-    /// photoFilename set; the caller still save()s it with its other edits.
-    func attachPhoto(_ jpeg: Data, to box: Box) throws -> Box {
-        try jpeg.write(to: Self.photoFile(box.id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+    /// Applies the editor's photo list to `box`: writes photos taken in
+    /// this edit to disk and queues their upload, and forgets photos taken
+    /// off the box (the server moves those to photos/removed/ and keeps them
+    /// 30 days). Returns the box with `photos` set; the caller still
+    /// save()s it with its other edits.
+    func applyPhotos(_ names: [String], newPhotos: [String: Data], to box: Box) throws -> Box {
+        for name in names {
+            guard let jpeg = newPhotos[name] else { continue }
+            try jpeg.write(to: Self.photoFile(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            pendingPhotos.insert(name)
+        }
+        let previous = boxes.first(where: { $0.id == box.id })?.photos ?? []
+        for name in previous where !names.contains(name) {
+            try? FileManager.default.removeItem(at: Self.photoFile(name))
+            pendingPhotos.remove(name)
+            photoVersions[name] = nil
+        }
         var b = box
-        b.photoFilename = b.expectedPhotoFilename
-        pendingPhotoIDs.insert(b.id)
+        b.photos = names
         bumpPhoto(b.id)
         persist()
         return b
     }
 
-    /// Detaches the photo. The server keeps its file (it has no delete
-    /// endpoint) and prunes it with the box's tombstone.
-    func removePhoto(from box: Box) -> Box {
-        try? FileManager.default.removeItem(at: Self.photoFile(box.id))
-        pendingPhotoIDs.remove(box.id)
-        photoVersions[box.id] = nil
-        bumpPhoto(box.id)
-        var b = box
-        b.photoFilename = nil
-        return b
-    }
-
     // MARK: Photos
 
-    /// The on-disk photo for a box, if one has been taken here or downloaded.
-    func localPhotoURL(for box: Box) -> URL? {
-        guard box.photoFilename != nil else { return nil }
-        let url = Self.photoFile(box.id)
+    /// The on-disk copy of one of a box's photos (the cover by default),
+    /// if it has been taken here or downloaded.
+    func localPhotoURL(for box: Box, name: String? = nil) -> URL? {
+        guard let name = name ?? box.photoFilename, box.photos.contains(name) else { return nil }
+        let url = Self.photoFile(name)
         // percentEncoded: false matters — "Application Support" has a space,
         // and the encoded form ("%20") names a file that doesn't exist.
         return FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) ? url : nil
     }
 
-    /// Downloads a box's photo if the local copy is missing or older than
-    /// the box. Same cache-busting rule as the web app's photoSrc(): a
-    /// changed updatedAt means the photo may have changed.
-    func refreshPhotoIfNeeded(for box: Box) async {
-        guard box.photoFilename != nil,
-              !pendingPhotoIDs.contains(box.id),           // never overwrite an unuploaded photo
-              !downloadsInFlight.contains(box.id),         // thumbnail + detail share one download
-              photoVersions[box.id] != box.updatedAt || localPhotoURL(for: box) == nil,
+    /// Downloads one of a box's photos (the cover by default) if there is
+    /// no local copy. Photos added since multi-photo boxes have names that
+    /// are never reused, so a local copy can't go stale; only the legacy
+    /// "<id>.jpg" can be replaced in place (by an older client), so it
+    /// keeps the web app's rule: a changed updatedAt means re-fetch.
+    func refreshPhotoIfNeeded(for box: Box, name: String? = nil) async {
+        guard let name = name ?? box.photoFilename, box.photos.contains(name),
+              !pendingPhotos.contains(name),               // never overwrite an unuploaded photo
+              !downloadsInFlight.contains(name),           // thumbnail + detail share one download
               let api = config.map(StockroomAPI.init) else { return }
-        downloadsInFlight.insert(box.id)
-        defer { downloadsInFlight.remove(box.id) }
+        let haveLocal = localPhotoURL(for: box, name: name) != nil
+        let isLegacy = name == "\(box.id).jpg"
+        guard !haveLocal || (isLegacy && photoVersions[name] != box.updatedAt) else { return }
+        downloadsInFlight.insert(name)
+        defer { downloadsInFlight.remove(name) }
         do {
-            let data = try await api.downloadPhoto(id: box.id)
-            try data.write(to: Self.photoFile(box.id), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            photoVersions[box.id] = box.updatedAt
+            let data = try await api.downloadPhoto(filename: name)
+            try data.write(to: Self.photoFile(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            photoVersions[name] = box.updatedAt
             bumpPhoto(box.id)
             persist()
         } catch {
@@ -211,10 +218,10 @@ final class BoxStore {
 
     private func bumpPhoto(_ id: String) { photoRevisions[id, default: 0] += 1 }
 
-    /// Server-side Gemini identification. Throws APIError.
-    func identifyItems(in jpeg: Data) async throws -> String {
+    /// Server-side Gemini identification of all of a box's photos at once.
+    func identifyItems(in jpegs: [Data]) async throws -> String {
         guard let config else { throw APIError.unauthorized }
-        return try await StockroomAPI(config: config).identify(jpeg: jpeg)
+        return try await StockroomAPI(config: config).identify(jpegs: jpegs)
     }
 
     // MARK: Sync
@@ -244,15 +251,17 @@ final class BoxStore {
         do {
             // 1. Photos first, so a box never points at a photo the server
             //    doesn't have yet.
-            for id in pendingPhotoIDs.sorted() {
-                guard let b = boxes.first(where: { $0.id == id }), !b.deleted,
-                      let data = try? Data(contentsOf: Self.photoFile(id)) else {
-                    pendingPhotoIDs.remove(id)
+            //    (The server also gives an unreferenced upload 24 hours'
+            //    grace before treating it as removed.)
+            for name in pendingPhotos.sorted() {
+                guard let b = boxes.first(where: { $0.photos.contains(name) }), !b.deleted,
+                      let data = try? Data(contentsOf: Self.photoFile(name)) else {
+                    pendingPhotos.remove(name)
                     continue
                 }
-                try await api.uploadPhoto(id: id, jpeg: data)
-                pendingPhotoIDs.remove(id)
-                photoVersions[id] = b.updatedAt
+                try await api.uploadPhoto(filename: name, jpeg: data)
+                pendingPhotos.remove(name)
+                photoVersions[name] = b.updatedAt
                 persist()
             }
 
@@ -350,6 +359,7 @@ final class BoxStore {
     private nonisolated struct CacheFile: Codable {
         var items: [Box]
         var pendingIDs: [String]
+        /// Filenames since multi-photo boxes; box ids before (migrated on load).
         var pendingPhotoIDs: [String]
         var photoVersions: [String: String]
         var lastSynced: Date?
@@ -363,10 +373,18 @@ final class BoxStore {
 
     private static var cacheFileURL: URL { rootDirectory.appending(path: "boxes.json") }
 
-    static func photoFile(_ id: String) -> URL {
+    /// Local file for a photo filename ("<id>.jpg" / "<id>-<suffix>.jpg").
+    /// Before multi-photo boxes the file was "<box id>.jpg", which is exactly
+    /// the legacy filename, so existing files are found without moving them.
+    static func photoFile(_ name: String) -> URL {
         let dir = rootDirectory.appending(path: "Photos", directoryHint: .isDirectory)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appending(path: "\(id).jpg")
+        return dir.appending(path: name)
+    }
+
+    /// Pre-multi-photo caches keyed photos by box id; the photo was "<id>.jpg".
+    nonisolated static func migratedPhotoKey(_ key: String) -> String {
+        key.hasSuffix(".jpg") ? key : key + ".jpg"
     }
 
     private func loadCache() {
@@ -379,15 +397,16 @@ final class BoxStore {
             return when >= cutoff || cache.pendingIDs.contains(b.id)
         }
         pendingIDs = Set(cache.pendingIDs)
-        pendingPhotoIDs = Set(cache.pendingPhotoIDs)
-        photoVersions = cache.photoVersions
+        pendingPhotos = Set(cache.pendingPhotoIDs.map(Self.migratedPhotoKey))
+        photoVersions = Dictionary(cache.photoVersions.map { (Self.migratedPhotoKey($0.key), $0.value) },
+                                   uniquingKeysWith: { a, _ in a })
         lastSynced = cache.lastSynced
     }
 
     private func persist() {
         guard !isPreview else { return }
         let cache = CacheFile(items: boxes, pendingIDs: pendingIDs.sorted(),
-                              pendingPhotoIDs: pendingPhotoIDs.sorted(),
+                              pendingPhotoIDs: pendingPhotos.sorted(),
                               photoVersions: photoVersions, lastSynced: lastSynced)
         guard let data = try? JSONEncoder().encode(cache) else { return }
         try? data.write(to: Self.cacheFileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

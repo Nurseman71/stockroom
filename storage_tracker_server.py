@@ -34,6 +34,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import sys
 import threading
@@ -93,6 +94,26 @@ ICON_CONTENT_TYPES = {
 GEMINI_KEY_FILE = BASE_DIR / "gemini_api_key.txt"
 GIT_DIR = BASE_DIR / ".git"
 TOMBSTONE_MAX_AGE_DAYS = 30
+
+# ---- Multiple photos per box (Oct 2026) ----
+# A box's photos are listed, cover first, in its `photos` array of
+# filenames. `photoFilename` is kept equal to photos[0] so clients that
+# predate the list (the GitHub Pages copy, an older iPhone build) still
+# show the cover. Every filename belongs to exactly one box: the box's
+# original photo is "<id>.jpg" and each extra one is "<id>-<suffix>.jpg".
+# Tying the name to the id means a crafted `photos` entry can never point
+# at (and later prune) another box's photo.
+MAX_PHOTOS_PER_BOX = 6
+PHOTO_KEY_RE = re.compile(r"^[A-Za-z0-9_]{1,64}(-[A-Za-z0-9]{1,16})?$")
+# Photos no box references any more (removed in the editor) are moved
+# here rather than deleted, and only deleted after TOMBSTONE_MAX_AGE_DAYS
+# -- the same undo window a deleted box gets. If a box references one
+# again (an older device re-syncs), it is moved back.
+REMOVED_PHOTOS_SUBDIR = "removed"
+# An upload can reach the server before the box metadata that references
+# it (the iPhone app uploads first), so a brand-new unreferenced file is
+# left alone for this long before it counts as an orphan.
+ORPHAN_GRACE_SECONDS = 24 * 3600
 
 # Universal Links for the native iPhone app (ios/). iOS fetches this file to
 # confirm the app may open https://<host>/stockroom/?boxid=... links -- i.e.
@@ -298,25 +319,134 @@ def prune_old_tombstones(items, max_age_days=TOMBSTONE_MAX_AGE_DAYS):
         if ts >= cutoff:
             kept.append(item)
             continue
-        # Old enough to prune — drop the item and any photo file it owned.
-        photo_path = photo_path_for_id(item.get("id", ""))
-        if photo_path is not None and photo_path.exists():
-            try:
-                photo_path.unlink()
-            except OSError:
-                pass
+        # Old enough to prune — drop the item and every photo file it owned.
+        item_id = item.get("id", "")
+        names = item_photo_filenames(item)
+        legacy = f"{item_id}.jpg"
+        if legacy not in names:
+            names.append(legacy)
+        for name in names:
+            photo_path = photo_path_for_id(name[:-4])
+            if photo_path is not None and photo_path.exists():
+                try:
+                    photo_path.unlink()
+                except OSError:
+                    pass
     return kept
 
 
-def photo_path_for_id(item_id):
+def photo_belongs_to(filename, item_id):
+    """True if `filename` is a valid photo name owned by box `item_id`."""
+    if not isinstance(filename, str) or not filename.endswith(".jpg") or not item_id:
+        return False
+    key = filename[:-4]
+    if not PHOTO_KEY_RE.match(key):
+        return False
+    return key == item_id or key.startswith(item_id + "-")
+
+
+def item_photo_filenames(item):
     """
-    Deterministic filename (<id>.jpg) so the client never needs the server
-    to tell it what a photo got saved as. Rejects anything that isn't a
-    plain id (no path separators) so a crafted id can't escape PHOTOS_DIR.
+    The box's photo filenames, cover first, de-duplicated, keeping only
+    names that belong to this box.
+
+    `photoFilename` is folded in at the front when the list doesn't
+    already have it: that is what an older client writes when it sets a
+    box's (only) photo without knowing about `photos`.
     """
-    if not item_id or "/" in item_id or "\\" in item_id or item_id in (".", ".."):
+    item_id = item.get("id", "")
+    raw = item.get("photos")
+    names = list(raw) if isinstance(raw, list) else []
+    cover = item.get("photoFilename")
+    if cover and cover not in names:
+        names.insert(0, cover)
+    seen, result = set(), []
+    for name in names:
+        if name in seen or not photo_belongs_to(name, item_id):
+            continue
+        seen.add(name)
+        result.append(name)
+    return result
+
+
+def normalize_photos(item):
+    """
+    Make `photos` and `photoFilename` agree on an incoming item, in place.
+
+    Items that have never had a photo are left untouched (no keys added).
+    The list is NOT truncated to MAX_PHOTOS_PER_BOX here -- the clients
+    enforce the cap; silently dropping a photo on the server would be
+    data loss.
+    """
+    if "photos" not in item and not item.get("photoFilename"):
+        return item
+    names = item_photo_filenames(item)
+    item["photos"] = names
+    item["photoFilename"] = names[0] if names else None
+    return item
+
+
+def sweep_orphan_photos(items, now=None):
+    """
+    Move photo files that no box references into photos/removed/, restore
+    any that are referenced again, and delete ones that have sat in
+    removed/ longer than TOMBSTONE_MAX_AGE_DAYS.
+
+    Tombstones count as references, so a deleted box's photos stay put
+    until prune_old_tombstones removes the box (and unlinks them).
+    Returns (moved, restored, deleted) counts.
+    """
+    now = now if now is not None else datetime.now(timezone.utc).timestamp()
+    referenced = set()
+    for item in items:
+        referenced.update(item_photo_filenames(item))
+    removed_dir = PHOTOS_DIR / REMOVED_PHOTOS_SUBDIR
+    moved = restored = deleted = 0
+
+    if removed_dir.is_dir():
+        for path in removed_dir.glob("*.jpg"):
+            try:
+                if path.name in referenced:
+                    target = PHOTOS_DIR / path.name
+                    if not target.exists():
+                        path.replace(target)
+                        restored += 1
+                elif now - path.stat().st_mtime > TOMBSTONE_MAX_AGE_DAYS * 86400:
+                    path.unlink()
+                    deleted += 1
+            except OSError:
+                pass
+
+    for path in PHOTOS_DIR.glob("*.jpg"):
+        if path.name in referenced:
+            continue
+        try:
+            if now - path.stat().st_mtime < ORPHAN_GRACE_SECONDS:
+                continue
+            removed_dir.mkdir(exist_ok=True)
+            target = removed_dir / path.name
+            path.replace(target)
+            # Start the 30-day clock now, not at the original upload.
+            os.utime(target, (now, now))
+            moved += 1
+        except OSError:
+            pass
+    return moved, restored, deleted
+
+
+def photo_path_for_id(photo_key):
+    """
+    Deterministic filename (<key>.jpg) so the client never needs the server
+    to tell it what a photo got saved as. The key is a box id (the box's
+    first photo) or "<box id>-<suffix>" (each further photo).
+
+    Only letters, digits and underscores, plus one "-<suffix>", are
+    accepted -- no separators, dots or parent references -- so a crafted
+    key can't escape PHOTOS_DIR.
+    """
+    if not photo_key or not PHOTO_KEY_RE.match(photo_key):
         return None
-    return PHOTOS_DIR / f"{item_id}.jpg"
+    return PHOTOS_DIR / f"{photo_key}.jpg"
 
 
 def icon_path_for(name):
@@ -355,10 +485,26 @@ def icon_path_for(name):
     return candidate
 
 
+GEMINI_PROMPT_MULTI = (
+    "These photos all show the contents of the SAME storage box, from "
+    "different angles or layers. List the distinct individual items "
+    "visible across all of them, naming each item only once even if it "
+    "appears in several photos. Respond with ONLY the item names, one "
+    "per line — no numbering, no bullets, no extra commentary, no "
+    "markdown formatting."
+)
+
+
 def identify_items_in_photo(photo_bytes):
+    """Single-photo form, kept for callers that predate multi-photo boxes."""
+    return identify_items_in_photos([photo_bytes])
+
+
+def identify_items_in_photos(photos_bytes):
     """
-    Sends the photo to Gemini's generateContent endpoint and returns the
-    plain-text list of items it names. Raises RuntimeError with a message
+    Sends the box's photos (one or more, in one request) to Gemini's
+    generateContent endpoint and returns the plain-text list of items it
+    names. Raises RuntimeError with a message
     already safe to show the user on any failure (missing key, network
     issue, Gemini error response, or an empty/blocked result).
     """
@@ -381,14 +527,12 @@ def identify_items_in_photo(photo_bytes):
             "has placeholder text or stray whitespace in it."
         )
 
-    request_body = json.dumps({
-        "contents": [{
-            "parts": [
-                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(photo_bytes).decode("ascii")}},
-                {"text": GEMINI_PROMPT},
-            ]
-        }]
-    }).encode("utf-8")
+    parts = [
+        {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(b).decode("ascii")}}
+        for b in photos_bytes
+    ]
+    parts.append({"text": GEMINI_PROMPT_MULTI if len(photos_bytes) > 1 else GEMINI_PROMPT})
+    request_body = json.dumps({"contents": [{"parts": parts}]}).encode("utf-8")
 
     # Key goes in the header rather than the query string so it never
     # lands in URLs, proxy logs, or this server's own access log.
@@ -633,15 +777,31 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 self._send_json(400, {"error": "invalid JSON"})
                 return
-            data_url = payload.get("data", "")
-            b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
-            try:
-                photo_bytes = base64.b64decode(b64)
-            except (ValueError, TypeError):
-                self._send_json(400, {"error": "invalid photo data"})
+            # `photos` (a list of data URLs, cover first) since multi-photo
+            # boxes; `data` (one data URL) from clients that predate them.
+            data_urls = payload.get("photos")
+            if not isinstance(data_urls, list) or not data_urls:
+                data_urls = [payload.get("data", "")]
+            if len(data_urls) > MAX_PHOTOS_PER_BOX:
+                self._send_json(400, {"error": f"at most {MAX_PHOTOS_PER_BOX} photos per request"})
                 return
+            photos_bytes = []
+            for data_url in data_urls:
+                if not isinstance(data_url, str):
+                    self._send_json(400, {"error": "invalid photo data"})
+                    return
+                b64 = data_url.split(",", 1)[1] if "," in data_url else data_url
+                try:
+                    photo_bytes = base64.b64decode(b64)
+                except (ValueError, TypeError):
+                    self._send_json(400, {"error": "invalid photo data"})
+                    return
+                if not photo_bytes:
+                    self._send_json(400, {"error": "invalid photo data"})
+                    return
+                photos_bytes.append(photo_bytes)
             try:
-                items_text = identify_items_in_photo(photo_bytes)
+                items_text = identify_items_in_photos(photos_bytes)
             except RuntimeError as e:
                 self._send_json(502, {"error": str(e)})
                 return
@@ -652,8 +812,8 @@ class Handler(BaseHTTPRequestHandler):
             if not self._token_ok(token):
                 self._send_json(401, {"error": "Invalid or missing token"})
                 return
-            item_id = path[len("/api/photos/"):]
-            photo_path = photo_path_for_id(item_id)
+            photo_key = path[len("/api/photos/"):]
+            photo_path = photo_path_for_id(photo_key)
             if photo_path is None:
                 self._send_json(400, {"error": "invalid id"})
                 return
@@ -697,12 +857,17 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         incoming_items = incoming.get("items", [])
+        incoming_items = [
+            normalize_photos(item) if isinstance(item, dict) else item
+            for item in incoming_items
+        ]
         with _lock:
             existing = load_data()
             merged_items = merge_items(existing.get("items", []), incoming_items)
             merged_items = prune_old_tombstones(merged_items)
             merged = {"items": merged_items}
             save_data(merged)
+            sweep_orphan_photos(merged_items)
         self._send_json(200, merged)
 
     def log_message(self, format, *args):

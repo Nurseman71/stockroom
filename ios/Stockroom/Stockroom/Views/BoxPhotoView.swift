@@ -2,7 +2,7 @@
 //  BoxPhotoView.swift
 //  Stockroom
 //
-//  Shows a box's photo from disk, fetching it from the Mac when the local
+//  Shows one of a box's photos (the cover unless `name` says otherwise) from disk, fetching it from the Mac when the local
 //  copy is missing or stale. Thumbnails are decoded at display size so a
 //  long list doesn't hold full-resolution photos in memory.
 //
@@ -16,6 +16,8 @@ struct BoxPhotoView: View {
     @Environment(BoxStore.self) private var store
     let box: Box
     let style: Style
+    /// Which photo; nil means the cover.
+    var name: String? = nil
 
     @State private var image: UIImage?
 
@@ -32,15 +34,15 @@ struct BoxPhotoView: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .task(id: "\(box.id)|\(box.updatedAt)|\(store.photoRevision(for: box.id))") {
+        .task(id: "\(box.id)|\(name ?? "cover")|\(box.updatedAt)|\(store.photoRevision(for: box.id))") {
             await load()
-            await store.refreshPhotoIfNeeded(for: box)
+            await store.refreshPhotoIfNeeded(for: box, name: name)
             await load()
         }
     }
 
     private func load() async {
-        guard let url = store.localPhotoURL(for: box),
+        guard let url = store.localPhotoURL(for: box, name: name),
               let full = UIImage(contentsOfFile: url.path(percentEncoded: false)) else {
             image = nil
             return

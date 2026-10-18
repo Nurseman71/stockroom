@@ -55,7 +55,7 @@ struct SettingsView: View {
                     LabeledContent("Boxes", value: "\(store.visibleBoxes.count)")
                     if store.hasUnsyncedChanges {
                         LabeledContent("Waiting to upload",
-                                       value: "\(store.pendingIDs.count) boxes, \(store.pendingPhotoIDs.count) photos")
+                                       value: "\(store.pendingIDs.count) boxes, \(store.pendingPhotos.count) photos")
                     }
                     Button("Sync Now", systemImage: "arrow.triangle.2.circlepath") {
                         store.requestSync()

@@ -2,7 +2,7 @@
 //  BoxDetailView.swift
 //  Stockroom
 //
-//  One box: photo, number, location, tags, and its contents as a
+//  One box: photos (cover + a strip of the rest), number, location, tags, and its contents as a
 //  checklist-style list (one item per line, as entered).
 //
 
@@ -10,7 +10,8 @@ import SwiftUI
 
 struct BoxDetailView: View {
     let box: Box
-    @State private var showingPhoto = false
+    /// Which photo the full-screen viewer opens on; nil when it's closed.
+    @State private var viewer: ViewerStart?
     @State private var editing = false
     @State private var printing = false
 
@@ -35,7 +36,7 @@ struct BoxDetailView: View {
                     HStack(alignment: .top, spacing: 18) {
                         if box.photoFilename != nil {
                             let side = min(paneWidth * 0.4, 300)
-                            photoButton(height: side)
+                            photoColumn(height: side)
                                 .frame(width: side)
                         }
                         VStack(alignment: .leading, spacing: 14) {
@@ -47,7 +48,7 @@ struct BoxDetailView: View {
                     }
                     contentsCard
                 } else {
-                    if box.photoFilename != nil { photoButton(height: 280) }
+                    if box.photoFilename != nil { photoColumn(height: 280) }
                     heading
                     tagChips
                     contentsCard
@@ -62,8 +63,8 @@ struct BoxDetailView: View {
         .background(Color(.systemGroupedBackground))
         .navigationTitle(box.box.isEmpty ? "Box" : "Box \(box.box)")
         .navigationBarTitleDisplayMode(.inline)
-        .fullScreenCover(isPresented: $showingPhoto) {
-            PhotoViewer(box: box)
+        .fullScreenCover(item: $viewer) { start in
+            PhotoViewer(box: box, start: start.index)
         }
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
@@ -84,15 +85,48 @@ struct BoxDetailView: View {
 
     // MARK: Pieces
 
+    /// The cover, plus a strip of every photo when there is more than one.
+    private func photoColumn(height: CGFloat) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            photoButton(height: height)
+            if box.photos.count > 1 {
+                ScrollView(.horizontal) {
+                    HStack(spacing: 8) {
+                        ForEach(Array(box.photos.enumerated()), id: \.element) { index, name in
+                            Button { viewer = ViewerStart(index: index) } label: {
+                                BoxPhotoView(box: box, style: .thumbnail, name: name)
+                                    .frame(width: 56, height: 56)
+                                    .clipShape(.rect(cornerRadius: 8))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel("Photo \(index + 1) of \(box.photos.count)")
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+    }
+
     private func photoButton(height: CGFloat) -> some View {
-        Button { showingPhoto = true } label: {
+        Button { viewer = ViewerStart(index: 0) } label: {
             BoxPhotoView(box: box, style: .hero)
                 .frame(maxWidth: .infinity)
                 .frame(height: height)
                 .clipShape(.rect(cornerRadius: 16))
+                .overlay(alignment: .bottomTrailing) {
+                    if box.photos.count > 1 {
+                        Label("\(box.photos.count)", systemImage: "photo.on.rectangle")
+                            .font(.caption.bold())
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(.ultraThinMaterial, in: .capsule)
+                            .padding(8)
+                    }
+                }
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Box photo, tap to enlarge")
+        .accessibilityLabel(box.photos.count > 1 ? "Box photos, \(box.photos.count), tap to view" : "Box photo, tap to enlarge")
     }
 
     private var heading: some View {
@@ -159,28 +193,57 @@ struct BoxDetailView: View {
     }
 }
 
-/// Full-screen photo, pinch to zoom.
+private struct ViewerStart: Identifiable {
+    let index: Int
+    var id: Int { index }
+}
+
+/// Full-screen photos: swipe between them, pinch to zoom.
 private struct PhotoViewer: View {
     let box: Box
     @Environment(\.dismiss) private var dismiss
-    @State private var scale: CGFloat = 1
+    @State private var index: Int
+
+    init(box: Box, start: Int) {
+        self.box = box
+        _index = State(initialValue: min(max(0, start), max(0, box.photos.count - 1)))
+    }
 
     var body: some View {
         NavigationStack {
-            BoxPhotoView(box: box, style: .full)
-                .scaleEffect(scale)
-                .gesture(MagnifyGesture()
-                    .onChanged { scale = max(1, $0.magnification) }
-                    .onEnded { _ in withAnimation(.spring) { scale = 1 } })
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(.black)
-                .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { dismiss() }
-                    }
+            TabView(selection: $index) {
+                ForEach(Array(box.photos.enumerated()), id: \.element) { i, name in
+                    ZoomablePhoto(box: box, name: name).tag(i)
                 }
-                .toolbarBackground(.hidden, for: .navigationBar)
+            }
+            .tabViewStyle(.page(indexDisplayMode: box.photos.count > 1 ? .always : .never))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(.black)
+            .navigationTitle(box.photos.count > 1 ? "\(index + 1) of \(box.photos.count)" : "")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Done") { dismiss() }
+                }
+            }
+            .toolbarBackground(.hidden, for: .navigationBar)
         }
+        .environment(\.colorScheme, .dark)   // white title and dots on the black backdrop
+    }
+}
+
+private struct ZoomablePhoto: View {
+    let box: Box
+    let name: String
+    @State private var scale: CGFloat = 1
+
+    var body: some View {
+        BoxPhotoView(box: box, style: .full, name: name)
+            .scaleEffect(scale)
+            .gesture(MagnifyGesture()
+                .onChanged { scale = max(1, $0.magnification) }
+                .onEnded { _ in withAnimation(.spring) { scale = 1 } })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }
 
