@@ -44,6 +44,9 @@ struct SettingsView: View {
                 }
 
                 Section("Status") {
+                    if let name = store.installedFor {
+                        LabeledContent("Installed for", value: name)
+                    }
                     LabeledContent("Sync", value: store.syncState.summary)
                     LabeledContent("Last synced") {
                         if let last = store.lastSynced {
@@ -53,6 +56,9 @@ struct SettingsView: View {
                         }
                     }
                     LabeledContent("Boxes", value: "\(store.visibleBoxes.count)")
+                    if !store.canDelete {
+                        LabeledContent("Deleting", value: "Off for this iPhone")
+                    }
                     if store.hasUnsyncedChanges {
                         LabeledContent("Waiting to upload",
                                        value: "\(store.pendingIDs.count) boxes, \(store.pendingPhotos.count) photos")

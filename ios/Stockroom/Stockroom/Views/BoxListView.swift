@@ -50,8 +50,12 @@ struct BoxListView: View {
                         row(for: box)
                             .tag(box.id)
                             .swipeActions(edge: .trailing) {
-                                Button("Delete", systemImage: "trash", role: .destructive) {
-                                    pendingDelete = box
+                                // Hidden on a family member's phone whose
+                                // deleting is switched off on the Mac.
+                                if store.canDelete {
+                                    Button("Delete", systemImage: "trash", role: .destructive) {
+                                        pendingDelete = box
+                                    }
                                 }
                             }
                     }

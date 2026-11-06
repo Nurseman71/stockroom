@@ -60,6 +60,11 @@ nonisolated struct ServerConfig: Sendable, Equatable {
 
 nonisolated struct ItemsEnvelope: Codable, Sendable {
     var items: [Box]
+    /// Sent by the server, never by the app (nil is omitted when encoding).
+    /// false when this phone's token belongs to a family member whose
+    /// deleting is switched off on the Mac's Users page. nil from a server
+    /// that predates users means "yes".
+    var canDelete: Bool? = nil
 }
 
 nonisolated struct StockroomAPI: Sendable {
@@ -83,15 +88,15 @@ nonisolated struct StockroomAPI: Sendable {
 
     func fetchAll() async throws -> [Box] {
         let data = try await send(request("api/data"))
-        return try decodeItems(data)
+        return try Self.decodeEnvelope(data).items
     }
 
     /// Sends local items; the server merges (newest updatedAt wins per id)
-    /// and returns the full merged set.
-    func push(_ items: [Box]) async throws -> [Box] {
+    /// and returns the full merged set, plus whether this phone may delete.
+    func push(_ items: [Box]) async throws -> ItemsEnvelope {
         var req = request("api/data", method: "POST")
         req.httpBody = try JSONEncoder().encode(ItemsEnvelope(items: items))
-        return try decodeItems(try await send(req))
+        return try Self.decodeEnvelope(try await send(req))
     }
 
     /// `filename` is "<key>.jpg"; the endpoint takes the key.
@@ -138,11 +143,12 @@ nonisolated struct StockroomAPI: Sendable {
         return req
     }
 
-    private func decodeItems(_ data: Data) throws -> [Box] {
-        guard let env = try? JSONDecoder().decode(ItemsEnvelope.self, from: data) else {
+    nonisolated static func decodeEnvelope(_ data: Data) throws -> ItemsEnvelope {
+        guard var env = try? JSONDecoder().decode(ItemsEnvelope.self, from: data) else {
             throw APIError.badResponse
         }
-        return env.items.filter { !$0.id.isEmpty }
+        env.items = env.items.filter { !$0.id.isEmpty }
+        return env
     }
 
     private func send(_ req: URLRequest) async throws -> Data {

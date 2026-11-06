@@ -329,5 +329,203 @@ class PathTraversalTests(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class UsersAndDeleteLockTests(unittest.TestCase):
+    """Family users: own tokens, and a canDelete switch the server enforces.
+
+    A bug here either lets a locked user delete (the thing this exists to
+    stop) or blocks a legitimate edit, so both directions are pinned.
+    """
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="stockroom-users-"))
+        self._real_users = server.USERS_FILE
+        server.USERS_FILE = self.tmp / "stockroom_users.json"   # never the real file
+
+    def tearDown(self):
+        server.USERS_FILE = self._real_users
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    # -- tokens -------------------------------------------------------------
+
+    def test_owner_token_can_always_delete(self):
+        who = server.principal_for_token(server.SYNC_TOKEN)
+        self.assertTrue(who["owner"])
+        self.assertTrue(who["canDelete"])
+
+    def test_new_user_starts_locked_with_their_own_token(self):
+        u = server.add_user("Alex")
+        self.assertNotEqual(u["token"], server.SYNC_TOKEN)
+        who = server.principal_for_token(u["token"])
+        self.assertEqual(who["name"], "Alex")
+        self.assertFalse(who["owner"])
+        self.assertFalse(who["canDelete"])
+
+    def test_switch_takes_effect_without_a_restart(self):
+        u = server.add_user("Blake")
+        server.update_user(u["id"], canDelete=True)
+        self.assertTrue(server.principal_for_token(u["token"])["canDelete"])
+
+    def test_reset_token_disconnects_the_old_one(self):
+        u = server.add_user("Casey")
+        server.update_user(u["id"], token="f" * 32)
+        self.assertIsNone(server.principal_for_token(u["token"]))
+        self.assertIsNotNone(server.principal_for_token("f" * 32))
+
+    def test_removed_user_token_stops_working(self):
+        u = server.add_user("Alex")
+        self.assertTrue(server.remove_user(u["id"]))
+        self.assertIsNone(server.principal_for_token(u["token"]))
+
+    def test_empty_and_unknown_tokens_are_refused(self):
+        server.add_user("Alex")
+        self.assertIsNone(server.principal_for_token(""))
+        self.assertIsNone(server.principal_for_token("nope"))
+
+    def test_duplicate_names_and_blank_names_are_rejected(self):
+        server.add_user("Alex")
+        with self.assertRaises(ValueError):
+            server.add_user("alex")
+        with self.assertRaises(ValueError):
+            server.add_user("   ")
+
+    def test_missing_or_corrupt_users_file_means_no_users(self):
+        self.assertEqual(server.load_users(), [])
+        server.USERS_FILE.write_text("{not json", encoding="utf-8")
+        self.assertEqual(server.load_users(), [])
+
+    # -- apply_delete_lock --------------------------------------------------
+
+    def test_locked_delete_of_a_live_box_is_dropped(self):
+        existing = [box("a", ts(2), contents="keep me")]
+        incoming = [box("a", ts(0), deleted=True)]
+        locked = server.apply_delete_lock(existing, incoming)
+        merged = by_id(server.merge_items(existing, locked))
+        self.assertFalse(merged["a"].get("deleted"))
+        self.assertEqual(merged["a"]["contents"], "keep me")
+
+    def test_locked_user_can_still_add_and_edit(self):
+        existing = [box("a", ts(2), contents="old")]
+        incoming = [box("a", ts(0), contents="new"), box("b", ts(0), contents="added")]
+        merged = by_id(server.merge_items(existing, server.apply_delete_lock(existing, incoming)))
+        self.assertEqual(merged["a"]["contents"], "new")
+        self.assertIn("b", merged)
+
+    def test_locked_tombstone_for_an_unknown_box_is_dropped(self):
+        self.assertEqual(server.apply_delete_lock([], [box("z", ts(0), deleted=True)]), [])
+
+    def test_tombstone_the_server_already_has_passes_through(self):
+        existing = [box("a", ts(2), deleted=True)]
+        incoming = [box("a", ts(2), deleted=True)]
+        self.assertEqual(len(server.apply_delete_lock(existing, incoming)), 1)
+
+    def test_locked_photo_removal_is_put_back(self):
+        existing = [box("a", ts(2), photos=["a.jpg", "a-x1.jpg"], photoFilename="a.jpg")]
+        incoming = [box("a", ts(0), photos=["a-x1.jpg"], photoFilename="a-x1.jpg")]
+        item = server.apply_delete_lock(existing, incoming)[0]
+        self.assertEqual(item["photos"], ["a-x1.jpg", "a.jpg"])   # cover choice kept
+        self.assertEqual(item["photoFilename"], "a-x1.jpg")
+
+    def test_locked_user_can_add_a_photo(self):
+        existing = [box("a", ts(2), photos=["a.jpg"], photoFilename="a.jpg")]
+        incoming = [box("a", ts(0), photos=["a.jpg", "a-n2.jpg"], photoFilename="a.jpg")]
+        self.assertEqual(server.apply_delete_lock(existing, incoming)[0]["photos"], ["a.jpg", "a-n2.jpg"])
+
+    def test_lock_does_not_mutate_the_incoming_item(self):
+        existing = [box("a", ts(2), photos=["a.jpg"], photoFilename="a.jpg")]
+        sent = box("a", ts(0), photos=[], photoFilename=None)
+        server.apply_delete_lock(existing, [sent])
+        self.assertEqual(sent["photos"], [])
+
+    # -- is_direct_local_request ---------------------------------------------
+
+    def test_users_page_only_for_a_direct_browser_on_this_mac(self):
+        ok = server.is_direct_local_request
+        self.assertTrue(ok("127.0.0.1", {"Host": "localhost:8787"}))
+        self.assertTrue(ok("::1", {"Host": "[::1]:8787"}))
+        self.assertTrue(ok("::ffff:127.0.0.1", {"Host": "127.0.0.1:8787"}))
+        # tailscale serve also arrives from loopback, but with these headers
+        self.assertFalse(ok("127.0.0.1", {"Host": "localhost:8787", "X-Forwarded-For": "100.101.1.2"}))
+        self.assertFalse(ok("127.0.0.1", {"Host": "localhost:8787", "Tailscale-User-Login": "x@y"}))
+        self.assertFalse(ok("127.0.0.1", {"Host": "mac.tailnet.ts.net"}))   # tailnet hostname
+        self.assertFalse(ok("127.0.0.1", {"Host": "evil.example:8787"}))    # DNS rebinding
+        self.assertFalse(ok("100.101.1.2", {"Host": "localhost:8787"}))     # a tailnet phone
+        self.assertFalse(ok("192.168.68.20", {"Host": "localhost:8787"}))   # LAN
+        self.assertFalse(ok("garbage", {"Host": "localhost"}))
+
+
+class InstallOnPhoneTests(unittest.TestCase):
+    """The Users page's Install on iPhone button: device list + background job."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="stockroom-install-"))
+        self._real = (server.USERS_FILE, server.INSTALL_SCRIPT)
+        server.USERS_FILE = self.tmp / "stockroom_users.json"
+        server._install_job = {"state": "idle"}
+
+    def tearDown(self):
+        server.USERS_FILE, server.INSTALL_SCRIPT = self._real
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def fake_script(self, body):
+        script = self.tmp / "install-for.sh"
+        script.write_text("#!/bin/sh\n" + body + "\n")
+        script.chmod(0o755)
+        server.INSTALL_SCRIPT = script
+
+    def wait(self):
+        import time
+        for _ in range(100):
+            if server.install_status()["state"] != "running":
+                return server.install_status()
+            time.sleep(0.05)
+        self.fail("install job never finished")
+
+    def test_only_paired_physical_iphones_are_listed_plugged_in_first(self):
+        def dev(udid, name, platform="iOS", reality="physical", pairing="paired", transport="localNetwork"):
+            return {"hardwareProperties": {"udid": udid, "platform": platform, "reality": reality,
+                                           "marketingName": "iPhone Duo"},
+                    "deviceProperties": {"name": name},
+                    "connectionProperties": {"pairingState": pairing, "transportType": transport}}
+        data = {"result": {"devices": [
+            dev("00008150-000A11112222333E", "Wi-Fi phone"),
+            dev("00008150-000B11112222333E", "Cable phone", transport="wired"),
+            dev("00008150-000C11112222333E", "Simulator", reality="virtual"),
+            dev("00008150-000D11112222333E", "Watch", platform="watchOS"),
+            dev("00008150-000E11112222333E", "Unpaired", pairing="unpaired"),
+            dev("bad udid; rm -rf /", "Weird"),
+        ]}}
+        phones = server.parse_devicectl_devices(data)
+        self.assertEqual([ph["name"] for ph in phones], ["Cable phone", "Wi-Fi phone"])
+        self.assertTrue(phones[0]["pluggedIn"])
+        self.assertEqual(server.parse_devicectl_devices({}), [])
+
+    def test_successful_install_records_the_phone(self):
+        self.fake_script('echo "Building for $6"; echo "args: $*"; exit 0')
+        u = server.add_user("Alex")
+        self.assertTrue(server.start_install(u, "00008150-000B11112222333E", "Alex's iPhone"))
+        job = self.wait()
+        self.assertEqual(job["state"], "done")
+        self.assertIn("--device 00008150-000B11112222333E --device-name Alex's iPhone --yes Alex", job["log"][-1])
+        saved = server.load_users()[0]
+        self.assertEqual(saved["phoneName"], "Alex's iPhone")
+        self.assertEqual(saved["token"], u["token"])          # untouched
+
+    def test_failed_install_is_reported_and_records_nothing(self):
+        self.fake_script('echo "Build failed." >&2; exit 1')
+        u = server.add_user("Alex")
+        server.start_install(u, "00008150-000B11112222333E", "Alex's iPhone")
+        job = self.wait()
+        self.assertEqual(job["state"], "failed")
+        self.assertIn("Build failed.", job["log"])
+        self.assertNotIn("phoneName", server.load_users()[0])
+
+    def test_only_one_install_at_a_time(self):
+        self.fake_script("sleep 1")
+        u = server.add_user("Alex")
+        self.assertTrue(server.start_install(u, "00008150-000B11112222333E", "A"))
+        self.assertFalse(server.start_install(u, "00008150-000B11112222333E", "A"))
+        self.wait()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

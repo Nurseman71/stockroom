@@ -156,3 +156,26 @@ struct MultiPhotoTests {
         #expect(BoxStore.migratedPhotoKey("b_x_aaaaaa-k1.jpg") == "b_x_aaaaaa-k1.jpg")
     }
 }
+
+/// The Users page on the Mac switches deleting off per family member; the
+/// server says so in every sync reply.
+struct DeleteSwitchTests {
+
+    @Test func lockedReplyDecodes() throws {
+        let json = #"{"items":[{"id":"b_1","box":"1","updatedAt":"2026-11-05T00:00:00.000Z","deleted":false}],"canDelete":false}"#
+        let env = try StockroomAPI.decodeEnvelope(Data(json.utf8))
+        #expect(env.canDelete == false)
+        #expect(env.items.count == 1)
+    }
+
+    @Test func olderServerWithoutTheKeyMeansAllowed() throws {
+        let env = try StockroomAPI.decodeEnvelope(Data(#"{"items":[]}"#.utf8))
+        #expect(env.canDelete == nil)
+        #expect((env.canDelete ?? true) == true)
+    }
+
+    @Test func pushBodyNeverSendsTheFlag() throws {
+        let body = try JSONEncoder().encode(ItemsEnvelope(items: []))
+        #expect(String(decoding: body, as: UTF8.self) == #"{"items":[]}"#)
+    }
+}

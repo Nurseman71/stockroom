@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Merged into the generated Info.plist (see INFOPLIST_FILE in Stockroom.xcconfig).
+  Empty in every normal build. ios/install-for.sh fills these in for a family
+  member's phone, so it opens already connected with THEIR token. No values
+  ever live in this file: the repo is public.
+-->
+<plist version="1.0">
+<dict>
+	<key>StockroomPresetName</key>
+	<string>$(STOCKROOM_PRESET_NAME)</string>
+	<key>StockroomPresetServer</key>
+	<string>$(STOCKROOM_PRESET_SERVER)</string>
+	<key>StockroomPresetToken</key>
+	<string>$(STOCKROOM_PRESET_TOKEN)</string>
+</dict>
+</plist>

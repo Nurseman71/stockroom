@@ -11,4 +11,13 @@
 
 STOCKROOM_LINK_DOMAIN = stockroom.invalid
 
+// Family installs. ../install-for.sh builds the app for one family member's
+// phone with their name, server address and token passed in on the
+// xcodebuild command line; Config/Preset-Info.plist carries them into the
+// app. Empty here, so every normal build (your own phones) has no preset.
+INFOPLIST_FILE = Config/Preset-Info.plist
+STOCKROOM_PRESET_NAME =
+STOCKROOM_PRESET_SERVER =
+STOCKROOM_PRESET_TOKEN =
+
 #include? "Stockroom.local.xcconfig"

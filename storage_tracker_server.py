@@ -36,7 +36,9 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -83,6 +85,14 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_FILE = BASE_DIR / "stockroom_data.json"
 INDEX_FILE = BASE_DIR / "index.html"
 TOKEN_FILE = BASE_DIR / "stockroom_token.txt"
+# Extra users (family members), each with their own token and a
+# per-user "may delete" switch -- managed from the Users page. See
+# the "Users" section below. Gitignored; the backup script captures it.
+USERS_FILE = BASE_DIR / "stockroom_users.json"
+USERS_PAGE_FILE = BASE_DIR / "users.html"
+# Builds the iPhone app with one user's token baked in and installs it on a
+# connected phone; the Users page drives it (see "Installing on a phone").
+INSTALL_SCRIPT = BASE_DIR / "ios" / "install-for.sh"
 PHOTOS_DIR = BASE_DIR / "photos"
 ICONS_DIR = BASE_DIR / "icons"
 ICON_CONTENT_TYPES = {
@@ -193,6 +203,249 @@ def get_gemini_api_key():
 
 
 SYNC_TOKEN = get_sync_token()
+
+
+# ---- Users (Nov 2026) ----
+# The owner (SYNC_TOKEN) can always do everything. Each extra user --
+# Christopher's family -- gets their own token and a canDelete switch he
+# flips on the Users page (/users, on this Mac only). This exists to
+# prevent ACCIDENTAL deletes, not to stop a determined person:
+#   * the apps hide their delete controls when the sync reply says
+#     canDelete is false, and
+#   * the server drops any delete a locked user sends anyway (a phone that
+#     deleted something before it picked up the new setting).
+# The file is re-read on every request, so a switch takes effect on the
+# user's next sync -- no restart.
+_users_lock = threading.Lock()
+
+
+def load_users():
+    """The users list, or [] if the file is missing or unreadable."""
+    try:
+        with USERS_FILE.open("r", encoding="utf-8") as f:
+            users = json.load(f).get("users", [])
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+    return [u for u in users if isinstance(u, dict) and u.get("id") and u.get("token")]
+
+
+def save_users(users):
+    tmp = USERS_FILE.with_suffix(".tmp")
+    with tmp.open("w", encoding="utf-8") as f:
+        json.dump({"users": users}, f, indent=2)
+    try:
+        os.chmod(tmp, 0o600)  # holds tokens, same as stockroom_token.txt
+    except OSError:
+        pass
+    tmp.replace(USERS_FILE)
+
+
+def add_user(name, can_delete=False):
+    """Create a user with a fresh token. Returns the new user dict."""
+    name = str(name).strip()[:40]
+    if not name:
+        raise ValueError("name is required")
+    with _users_lock:
+        users = load_users()
+        if any(u.get("name", "").lower() == name.lower() for u in users):
+            raise ValueError(f"there is already a user called {name}")
+        user = {
+            "id": "u_" + secrets.token_hex(4),
+            "name": name,
+            "token": secrets.token_hex(16),
+            "canDelete": bool(can_delete),
+            "createdAt": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        }
+        users.append(user)
+        save_users(users)
+    return user
+
+
+def update_user(user_id, **changes):
+    """Apply `changes` to one user (canDelete, token). Returns it, or None."""
+    with _users_lock:
+        users = load_users()
+        for user in users:
+            if user["id"] == user_id:
+                user.update(changes)
+                save_users(users)
+                return user
+    return None
+
+
+def remove_user(user_id):
+    with _users_lock:
+        users = load_users()
+        kept = [u for u in users if u["id"] != user_id]
+        if len(kept) == len(users):
+            return False
+        save_users(kept)
+    return True
+
+
+def principal_for_token(token):
+    """Who a token belongs to: the owner, a user, or None.
+
+    Returns {"owner": bool, "name": str, "canDelete": bool}.
+    """
+    if not token:
+        return None
+    if hmac.compare_digest(token, SYNC_TOKEN):
+        return {"owner": True, "name": "Owner", "canDelete": True}
+    for user in load_users():
+        if hmac.compare_digest(token, str(user["token"])):
+            return {"owner": False, "name": user.get("name", ""),
+                    "canDelete": bool(user.get("canDelete"))}
+    return None
+
+
+def apply_delete_lock(existing_items, incoming_items):
+    """Strip deletes out of a sync from a user who may not delete.
+
+    * A tombstone for a box that is live on the server (or that the server
+      has never seen) is dropped, so the server's copy stands.
+    * A photo the server's copy has but the incoming copy lacks is put back
+      at the end of the list, so removing a photo is blocked too.
+    Everything else -- adding boxes and photos, editing -- passes through.
+    """
+    by_id = {i["id"]: i for i in existing_items if isinstance(i, dict) and "id" in i}
+    result = []
+    for item in incoming_items:
+        if not isinstance(item, dict):
+            result.append(item)
+            continue
+        current = by_id.get(item.get("id"))
+        live_on_server = current is not None and not current.get("deleted")
+        if item.get("deleted"):
+            if current is None or live_on_server:
+                continue
+            result.append(item)  # already deleted on the server: harmless
+            continue
+        if live_on_server:
+            names = item_photo_filenames(item)
+            missing = [n for n in item_photo_filenames(current) if n not in names]
+            if missing:
+                item = dict(item)
+                item["photos"] = names + missing
+                normalize_photos(item)
+        result.append(item)
+    return result
+
+
+# ---- Installing on a phone (Users page "Install on iPhone") ----
+# The page lists iPhones connected to this Mac (devicectl), and runs
+# ios/install-for.sh for the chosen user and phone in the background,
+# one install at a time; the page polls install_status() for progress.
+UDID_RE = re.compile(r"^[A-Za-z0-9-]{8,64}$")
+INSTALL_LOG_LINES = 200
+_install_lock = threading.Lock()
+_install_job = {"state": "idle"}
+
+
+def parse_devicectl_devices(data):
+    """Paired physical iPhones from `devicectl list devices` JSON output."""
+    phones = []
+    for d in (data or {}).get("result", {}).get("devices", []):
+        hw = d.get("hardwareProperties", {}) or {}
+        dp = d.get("deviceProperties", {}) or {}
+        cp = d.get("connectionProperties", {}) or {}
+        if hw.get("platform") != "iOS" or hw.get("reality") == "virtual":
+            continue
+        if cp.get("pairingState") != "paired" or not UDID_RE.match(str(hw.get("udid", ""))):
+            continue
+        phones.append({
+            "udid": hw["udid"],
+            "name": dp.get("name", "iPhone"),
+            "model": hw.get("marketingName", ""),
+            "pluggedIn": cp.get("transportType") == "wired",
+        })
+    phones.sort(key=lambda ph: (not ph["pluggedIn"], ph["name"].lower()))
+    return phones
+
+
+def list_connected_iphones():
+    """Raises RuntimeError with a readable message if devicectl fails."""
+    with tempfile.TemporaryDirectory() as tmp:
+        out = Path(tmp) / "devices.json"
+        try:
+            subprocess.run(["xcrun", "devicectl", "list", "devices", "--json-output", str(out)],
+                           capture_output=True, timeout=60, check=True)
+            return parse_devicectl_devices(json.loads(out.read_text(encoding="utf-8")))
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as e:
+            raise RuntimeError(f"Couldn't list iPhones (is Xcode installed?): {e}")
+
+
+def install_status():
+    with _install_lock:
+        return {k: (list(v) if isinstance(v, list) else v) for k, v in _install_job.items()}
+
+
+def start_install(user, udid, device_name):
+    """Start install-for.sh in the background. Returns False if one is running."""
+    global _install_job
+    with _install_lock:
+        if _install_job.get("state") == "running":
+            return False
+        _install_job = {"state": "running", "userId": user["id"], "user": user["name"],
+                        "device": device_name, "log": [], "started": datetime.now(timezone.utc).isoformat()}
+        job = _install_job
+    threading.Thread(target=_run_install, args=(job, user, udid, device_name), daemon=True).start()
+    return True
+
+
+def _run_install(job, user, udid, device_name):
+    # An argument list, never a shell string: the name and udid can't inject.
+    # Via bash explicitly, so a lost executable bit (it happens when files
+    # are copied around) doesn't matter.
+    cmd = ["/bin/bash", str(INSTALL_SCRIPT), "--device", udid, "--device-name", device_name, "--yes", user["name"]]
+    try:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                stdin=subprocess.DEVNULL, text=True, cwd=str(BASE_DIR))
+        for line in proc.stdout:
+            with _install_lock:
+                job["log"].append(line.rstrip("\n"))
+                del job["log"][:-INSTALL_LOG_LINES]
+        code = proc.wait()
+    except OSError as e:
+        with _install_lock:
+            job["log"].append(f"Couldn't start the installer: {e}")
+        code = -1
+    ok = code == 0
+    if ok:
+        update_user(user["id"], phoneName=device_name, phoneUDID=udid,
+                    installedAt=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"))
+    with _install_lock:
+        job["state"] = "done" if ok else "failed"
+
+
+# The Users page and its API hand out every token, so they answer only a
+# browser on this Mac talking to the server directly. Requests that come
+# in through Tailscale serve ALSO arrive from 127.0.0.1, so loopback alone
+# is not enough: tailscale serve adds forwarding/identity headers, and a
+# request carrying any of them is refused. The Host check stops a web
+# page from reaching it via DNS rebinding.
+_LOCAL_HOSTS = {"localhost", "127.0.0.1", "[::1]", "::1"}
+_FORWARD_HEADER_PREFIXES = ("x-forwarded-", "tailscale-", "forwarded", "x-real-ip")
+
+
+def is_direct_local_request(client_addr, headers):
+    try:
+        ip = ipaddress.ip_address(client_addr)
+    except ValueError:
+        return False
+    if getattr(ip, "ipv4_mapped", None):
+        ip = ip.ipv4_mapped
+    if not ip.is_loopback:
+        return False
+    for key in headers.keys():
+        if key.lower().startswith(_FORWARD_HEADER_PREFIXES):
+            return False
+    host = (headers.get("Host") or "").strip().lower()
+    if host.startswith("["):
+        host = host.split("]", 1)[0] + "]"
+    else:
+        host = host.rsplit(":", 1)[0] if ":" in host else host
+    return host in _LOCAL_HOSTS
 # NOTE: the Gemini key is deliberately NOT cached at startup — it's read
 # fresh on every identify request so swapping in a new key only needs the
 # file saved, not a server restart.
@@ -583,14 +836,18 @@ class Handler(BaseHTTPRequestHandler):
         return parsed.path, token
 
     def _token_ok(self, token):
-        return hmac.compare_digest(token, SYNC_TOKEN)
+        """Owner or any user. What a user may do is checked separately."""
+        return principal_for_token(token) is not None
 
-    def _send_json(self, status, payload):
+    def _send_json(self, status, payload, cors=True, no_store=False):
         body = json.dumps(payload).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        if cors:
+            self.send_header("Access-Control-Allow-Origin", "*")
+        if no_store:
+            self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
 
@@ -690,12 +947,34 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path, token = self._parsed_path_and_token()
         if path == "/api/data":
-            if not self._token_ok(token):
+            who = principal_for_token(token)
+            if who is None:
                 self._send_json(401, {"error": "Invalid or missing token"})
                 return
             with _lock:
                 data = load_data()
+            data["canDelete"] = who["canDelete"]
             self._send_json(200, data)
+        elif path == "/users":
+            if not is_direct_local_request(self.client_address[0], self.headers):
+                self.send_error(403, "The Users page only opens on the Stockroom Mac itself, at http://localhost:%d/users" % PORT)
+                return
+            self._send_users_page()
+        elif path == "/api/users":
+            if not self._users_api_allowed(token):
+                return
+            self._send_json(200, {"users": load_users()}, cors=False, no_store=True)
+        elif path == "/api/install/devices":
+            if not self._users_api_allowed(token):
+                return
+            try:
+                self._send_json(200, {"devices": list_connected_iphones()}, cors=False, no_store=True)
+            except RuntimeError as e:
+                self._send_json(502, {"error": str(e)}, cors=False)
+        elif path == "/api/install/status":
+            if not self._users_api_allowed(token):
+                return
+            self._send_json(200, install_status(), cors=False, no_store=True)
         elif path.startswith("/photos/"):
             if not self._token_ok(token):
                 self._send_json(401, {"error": "Invalid or missing token"})
@@ -841,10 +1120,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"filename": photo_path.name})
             return
 
+        if path == "/api/users":
+            self._handle_users_post(token)
+            return
+
+        if path == "/api/install":
+            self._handle_install_post(token)
+            return
+
         if path != "/api/data":
             self.send_error(404, "Not found")
             return
-        if not self._token_ok(token):
+        who = principal_for_token(token)
+        if who is None:
             self._send_json(401, {"error": "Invalid or missing token"})
             return
         raw = self._read_body()
@@ -863,12 +1151,104 @@ class Handler(BaseHTTPRequestHandler):
         ]
         with _lock:
             existing = load_data()
+            if not who["canDelete"]:
+                incoming_items = apply_delete_lock(existing.get("items", []), incoming_items)
             merged_items = merge_items(existing.get("items", []), incoming_items)
             merged_items = prune_old_tombstones(merged_items)
             merged = {"items": merged_items}
             save_data(merged)
             sweep_orphan_photos(merged_items)
+        merged["canDelete"] = who["canDelete"]
         self._send_json(200, merged)
+
+    # ---- Users page (this Mac only) ----
+    def _users_api_allowed(self, token):
+        """Owner token AND a direct request on this Mac. Sends the error if not."""
+        if not is_direct_local_request(self.client_address[0], self.headers):
+            self._send_json(403, {"error": "only available on the Stockroom Mac itself"}, cors=False)
+            return False
+        if not hmac.compare_digest(token, SYNC_TOKEN):
+            self._send_json(401, {"error": "owner token required"}, cors=False)
+            return False
+        return True
+
+    def _send_users_page(self):
+        if not USERS_PAGE_FILE.exists():
+            self.send_error(404, "Not found")
+            return
+        html = USERS_PAGE_FILE.read_text(encoding="utf-8")
+        boot = ("<script>window.__STOCKROOM_ADMIN__ = "
+                + json.dumps({"token": SYNC_TOKEN}) + ";</script>")
+        html = html.replace("</head>", boot + "\n</head>", 1)
+        body = html.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Frame-Options", "DENY")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _handle_install_post(self, token):
+        if not self._users_api_allowed(token):
+            return
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "invalid JSON"}, cors=False)
+            return
+        udid = str(body.get("udid", ""))
+        device_name = str(body.get("deviceName", "iPhone"))[:80]
+        user = next((u for u in load_users() if u["id"] == str(body.get("id", ""))), None)
+        if user is None:
+            self._send_json(404, {"error": "no such user"}, cors=False)
+            return
+        if not UDID_RE.match(udid):
+            self._send_json(400, {"error": "invalid device"}, cors=False)
+            return
+        if not INSTALL_SCRIPT.exists():
+            self._send_json(500, {"error": "ios/install-for.sh is missing"}, cors=False)
+            return
+        if not start_install(user, udid, device_name):
+            self._send_json(409, {"error": "another install is still running"}, cors=False)
+            return
+        self._send_json(202, install_status(), cors=False, no_store=True)
+
+    def _handle_users_post(self, token):
+        if not self._users_api_allowed(token):
+            return
+        raw = self._read_body()
+        if raw is None:
+            return
+        try:
+            body = json.loads(raw or b"{}")
+        except json.JSONDecodeError:
+            self._send_json(400, {"error": "invalid JSON"}, cors=False)
+            return
+        action = body.get("action")
+        user_id = str(body.get("id", ""))
+        try:
+            if action == "add":
+                result = add_user(body.get("name", ""), bool(body.get("canDelete", False)))
+            elif action == "setCanDelete":
+                result = update_user(user_id, canDelete=bool(body.get("canDelete")))
+            elif action == "resetToken":
+                result = update_user(user_id, token=secrets.token_hex(16))
+            elif action == "remove":
+                result = {"removed": remove_user(user_id)}
+            else:
+                self._send_json(400, {"error": "unknown action"}, cors=False)
+                return
+        except ValueError as e:
+            self._send_json(400, {"error": str(e)}, cors=False)
+            return
+        if result is None:
+            self._send_json(404, {"error": "no such user"}, cors=False)
+            return
+        self._send_json(200, {"user": result, "users": load_users()}, cors=False, no_store=True)
 
     def log_message(self, format, *args):
         """

@@ -17,6 +17,7 @@
 //  there is no box ceiling.
 //
 
+import CryptoKit
 import Foundation
 import Observation
 
@@ -47,6 +48,15 @@ final class BoxStore {
 
     private(set) var serverURLString: String
     private(set) var hasToken: Bool
+    /// Whether this phone may delete boxes and remove saved photos. Set by
+    /// the server on every sync from the Users page on the Mac (owner: always
+    /// true). Remembered between launches so the controls stay hidden offline.
+    /// The server also refuses deletes from a locked phone, so this is about
+    /// not offering the button, not the only line of defence.
+    private(set) var canDelete: Bool
+    /// The family member this install was built for by ios/install-for.sh,
+    /// or nil for a normal build.
+    let installedFor: String?
 
     var visibleBoxes: [Box] { boxes.filter { !$0.deleted } }
     var hasUnsyncedChanges: Bool { !pendingIDs.isEmpty || !pendingPhotos.isEmpty }
@@ -60,6 +70,8 @@ final class BoxStore {
     private var syncRequestedDuringFlight = false
 
     private static let urlDefaultsKey = "serverURL"
+    private static let canDeleteDefaultsKey = "canDelete"
+    private static let presetAppliedKey = "presetTokenSHA256"
     private static let tokenAccount = "syncToken"
     private static let tombstoneMaxAge: TimeInterval = 30 * 24 * 3600   // matches server
 
@@ -73,8 +85,10 @@ final class BoxStore {
     }
 
     init() {
+        installedFor = Self.applyInstallPreset()
         serverURLString = UserDefaults.standard.string(forKey: Self.urlDefaultsKey) ?? ""
         hasToken = !(Keychain.read(Self.tokenAccount) ?? "").isEmpty
+        canDelete = UserDefaults.standard.object(forKey: Self.canDeleteDefaultsKey) as? Bool ?? true
         loadCache()
         syncState = isConfigured ? .idle : .notConfigured
     }
@@ -83,6 +97,8 @@ final class BoxStore {
     init(previewBoxes: [Box]) {
         serverURLString = "https://preview.example.ts.net:8788"
         hasToken = true
+        canDelete = true
+        installedFor = nil
         isPreview = true
         boxes = previewBoxes
         syncState = .idle
@@ -142,7 +158,7 @@ final class BoxStore {
     }
 
     func delete(id: String) {
-        guard var b = boxes.first(where: { $0.id == id }) else { return }
+        guard canDelete, var b = boxes.first(where: { $0.id == id }) else { return }
         b.deleted = true
         b.updatedAt = Timestamp.now()
         apply(b)
@@ -267,7 +283,9 @@ final class BoxStore {
 
             // 2. Push everything; the server merges and returns the result.
             let sentStamps = Dictionary(boxes.map { ($0.id, $0.updatedAt) }, uniquingKeysWith: { a, _ in a })
-            let merged = try await api.push(boxes)
+            let reply = try await api.push(boxes)
+            let merged = reply.items
+            setCanDelete(reply.canDelete ?? true)
 
             // 3. Adopt the server's view, but keep anything edited on this
             //    phone while the request was in flight.
@@ -385,6 +403,39 @@ final class BoxStore {
     /// Pre-multi-photo caches keyed photos by box id; the photo was "<id>.jpg".
     nonisolated static func migratedPhotoKey(_ key: String) -> String {
         key.hasSuffix(".jpg") ? key : key + ".jpg"
+    }
+
+    /// A family install (ios/install-for.sh) carries that person's server
+    /// address and token in Info.plist, so the phone opens already connected.
+    /// Applied on first launch, and again only when the baked-in token itself
+    /// changes (a reinstall after Reset token on the Mac's Users page) —
+    /// Keychain items survive reinstalls, so without that the old token would
+    /// stick. A token typed in Settings later is otherwise left alone.
+    /// Only a hash of the applied token is remembered, never the token.
+    private static func applyInstallPreset() -> String? {
+        let info = Bundle.main.infoDictionary ?? [:]
+        func value(_ key: String) -> String {
+            ((info[key] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let token = value("StockroomPresetToken")
+        guard !token.isEmpty, let url = ServerConfig.validatedURL(value("StockroomPresetServer")) else {
+            return nil
+        }
+        let digest = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()
+        let defaults = UserDefaults.standard
+        if defaults.string(forKey: presetAppliedKey) != digest {
+            Keychain.write(token, account: tokenAccount)
+            defaults.set(url.absoluteString, forKey: urlDefaultsKey)
+            defaults.set(digest, forKey: presetAppliedKey)
+        }
+        let name = value("StockroomPresetName")
+        return name.isEmpty ? nil : name
+    }
+
+    private func setCanDelete(_ value: Bool) {
+        guard value != canDelete else { return }
+        canDelete = value
+        UserDefaults.standard.set(value, forKey: Self.canDeleteDefaultsKey)
     }
 
     private func loadCache() {

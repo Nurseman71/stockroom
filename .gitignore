@@ -11,3 +11,7 @@ __pycache__/
 # somewhere other than git; the repo is public.
 photos/
 backup.log
+
+# Family users and their tokens (Users page) -- secrets, never commit.
+stockroom_users.json
+stockroom_users.tmp

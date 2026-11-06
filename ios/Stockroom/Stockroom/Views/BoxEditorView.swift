@@ -305,7 +305,11 @@ struct BoxEditorView: View {
                     if photos.first?.name != name {
                         Button("Make Cover", systemImage: "star") { makeCover(name) }
                     }
-                    Button("Remove", systemImage: "trash", role: .destructive) { removePhoto(name) }
+                    // A locked phone can still drop a photo it took in this
+                    // edit (not saved yet), but not one already on the box.
+                    if store.canDelete || photos.first(where: { $0.name == name })?.jpeg != nil {
+                        Button("Remove", systemImage: "trash", role: .destructive) { removePhoto(name) }
+                    }
                 }
                 .buttonStyle(.bordered)
                 .labelStyle(.titleAndIcon)

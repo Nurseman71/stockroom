@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Stockroom Users</title>
+<!--
+  Served only by storage_tracker_server.py at http://localhost:8787/users,
+  and only to a browser on the Stockroom Mac itself. The server injects the
+  owner token as window.__STOCKROOM_ADMIN__ -- this file holds no secrets.
+-->
+<style>
+  :root{
+    --ink:#1C1F26; --ink-2:#242933; --ink-3:#2C323E; --kraft:#D8C7A1;
+    --steel:#5C82A6; --stamp:#B5493F; --paper:#EDEAE0; --muted:#8B8D93; --line:#383E4A;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--ink);color:var(--paper);
+    font-family:'IBM Plex Sans',-apple-system,system-ui,sans-serif;}
+  main{max-width:720px;margin:0 auto;padding:32px 16px 64px;}
+  h1{font-size:26px;margin:0 0 4px;color:var(--kraft);letter-spacing:.02em;}
+  .sub{color:var(--muted);margin:0 0 28px;line-height:1.5;}
+  .card{background:var(--ink-2);border:1px solid var(--line);border-radius:12px;
+    padding:16px 18px;margin-bottom:12px;}
+  .row{display:flex;align-items:center;gap:14px;flex-wrap:wrap;}
+  .name{font-size:18px;font-weight:600;flex:1;min-width:120px;}
+  .state{font-size:13px;color:var(--muted);}
+  .state.on{color:var(--stamp);}
+  .tokenline{display:flex;gap:8px;align-items:center;margin-top:12px;flex-wrap:wrap;}
+  code{background:var(--ink);border:1px solid var(--line);border-radius:6px;padding:6px 8px;
+    font-family:ui-monospace,Menlo,monospace;font-size:13px;color:var(--kraft);
+    flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  button{font:inherit;font-size:13px;border-radius:8px;border:1px solid var(--line);
+    background:var(--ink-3);color:var(--paper);padding:6px 12px;cursor:pointer;}
+  button:hover{border-color:var(--kraft);}
+  button.danger{color:#e9a29b;}
+  button.primary{background:var(--kraft);color:var(--ink);border-color:var(--kraft);font-weight:600;}
+  /* toggle */
+  .switch{position:relative;display:inline-flex;align-items:center;gap:10px;cursor:pointer;font-size:14px;}
+  .switch input{position:absolute;opacity:0;width:0;height:0;}
+  .track{width:46px;height:26px;border-radius:13px;background:var(--ink-3);border:1px solid var(--line);
+    position:relative;transition:background .15s;}
+  .track::after{content:"";position:absolute;top:2px;left:2px;width:20px;height:20px;border-radius:50%;
+    background:var(--muted);transition:transform .15s, background .15s;}
+  .switch input:checked + .track{background:var(--stamp);border-color:var(--stamp);}
+  .switch input:checked + .track::after{transform:translateX(20px);background:var(--paper);}
+  .switch input:focus-visible + .track{outline:2px solid var(--steel);outline-offset:2px;}
+  .owner{opacity:.75;}
+  form{display:flex;gap:8px;margin-top:24px;}
+  input[type=text]{flex:1;font:inherit;background:var(--ink-2);color:var(--paper);
+    border:1px solid var(--line);border-radius:8px;padding:8px 10px;}
+  .help{margin-top:32px;color:var(--muted);font-size:14px;line-height:1.6;}
+  .help b{color:var(--paper);}
+  #msg{min-height:20px;margin:8px 0;color:var(--kraft);font-size:14px;}
+  .installrow{display:flex;align-items:center;gap:12px;margin-top:12px;flex-wrap:wrap;}
+  .installed{font-size:13px;color:var(--muted);}
+  .panel{margin-top:12px;padding:12px 14px;border:1px solid var(--line);border-radius:10px;background:var(--ink);}
+  .panel[hidden]{display:none;}
+  .panel p{margin:0 0 10px;font-size:14px;line-height:1.5;color:var(--muted);}
+  .phone{display:flex;align-items:center;gap:10px;padding:6px 0;font-size:15px;cursor:pointer;}
+  .phone small{color:var(--muted);}
+  .tag{font-size:11px;color:var(--ink);background:var(--kraft);border-radius:4px;padding:1px 6px;}
+  .actions{display:flex;gap:8px;margin-top:10px;}
+  .progress{font-size:14px;color:var(--paper);}
+  .progress.ok{color:#9fd39b;} .progress.bad{color:#e9a29b;}
+  pre{white-space:pre-wrap;font-size:12px;color:var(--muted);max-height:220px;overflow:auto;margin:8px 0 0;}
+  .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--kraft);
+    border-radius:50%;animation:spin .8s linear infinite;vertical-align:-1px;margin-right:6px;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<main>
+  <h1>Users</h1>
+  <p class="sub">Each person's phone uses its own token. Turn <b>Delete</b> off and that phone can still
+    browse, add and edit boxes, but it can't delete boxes or remove photos. A change reaches the phone on its next sync (within about 30 seconds).</p>
+
+  <div class="card owner"><div class="row">
+    <div class="name">You</div><div class="state">Your own phones · deleting always allowed</div>
+  </div></div>
+
+  <div id="list"></div>
+  <div id="msg" role="status"></div>
+
+  <form id="add">
+    <input type="text" id="newname" placeholder="Name" maxlength="40" autocomplete="off" required>
+    <button class="primary" type="submit">Add user</button>
+  </form>
+
+  <div class="help">
+    <b>Setting up a phone:</b> plug it into this Mac and press <b>Install on iPhone</b> on that person's card.
+    Stockroom goes onto the phone already connected as them, with nothing to type on the phone.
+    <br><b>Reset token</b> disconnects that one phone; press Install on iPhone again to reconnect it.
+    Installs last about a year; installing again renews it.
+  </div>
+</main>
+<script>
+(() => {
+  const TOKEN = (window.__STOCKROOM_ADMIN__ || {}).token || '';
+  const list = document.getElementById('list');
+  const msg = document.getElementById('msg');
+  const say = t => { msg.textContent = t; };
+
+  async function api(body, path = '/api/users') {
+    const url = path + '?token=' + encodeURIComponent(TOKEN);
+    const opts = body ? { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify(body) } : {};
+    const res = await fetch(url, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  function el(tag, props = {}, ...kids) {
+    const n = document.createElement(tag);
+    Object.assign(n, props);
+    for (const k of kids) n.append(k);
+    return n;
+  }
+
+  function render(users) {
+    list.replaceChildren();
+    if (!users.length) list.append(el('p', { className: 'sub', textContent: 'No other users yet.' }));
+    for (const u of users) {
+      const box = el('input', { type: 'checkbox', checked: !!u.canDelete });
+      box.setAttribute('aria-label', 'Allow ' + u.name + ' to delete');
+      const state = el('span', { className: 'state' + (u.canDelete ? ' on' : '') ,
+        textContent: u.canDelete ? 'Can delete' : 'Can’t delete' });
+      box.addEventListener('change', async () => {
+        box.disabled = true;
+        try {
+          await api({ action: 'setCanDelete', id: u.id, canDelete: box.checked });
+          say(u.name + (box.checked ? ' can delete again.' : ' can no longer delete.'));
+          load();
+        } catch (e) { say('Couldn’t change it: ' + e.message); box.checked = !box.checked; box.disabled = false; }
+      });
+      const toggle = el('label', { className: 'switch' }, box, el('span', { className: 'track' }), state);
+
+      const code = el('code', { textContent: u.token, title: u.token });
+      const copy = el('button', { type: 'button', textContent: 'Copy' });
+      copy.onclick = async () => {
+        try { await navigator.clipboard.writeText(u.token); say(u.name + '’s token copied.'); }
+        catch { say('Copy failed. Select the token and press ⌘C.'); }
+      };
+      const reset = el('button', { type: 'button', textContent: 'Reset token' });
+      reset.onclick = async () => {
+        if (!confirm('Reset ' + u.name + '’s token? Their phone stops syncing until you paste the new one into it.')) return;
+        try { await api({ action: 'resetToken', id: u.id }); say(u.name + ' has a new token.'); load(); }
+        catch (e) { say('Couldn’t reset: ' + e.message); }
+      };
+      const remove = el('button', { type: 'button', className: 'danger', textContent: 'Remove' });
+      remove.onclick = async () => {
+        if (!confirm('Remove ' + u.name + '? Their phone stops syncing. Boxes are not affected.')) return;
+        try { await api({ action: 'remove', id: u.id }); say(u.name + ' removed.'); load(); }
+        catch (e) { say('Couldn’t remove: ' + e.message); }
+      };
+
+      const panel = el('div', { className: 'panel', hidden: true });
+      const installBtn = el('button', { type: 'button', className: 'primary', textContent: 'Install on iPhone' });
+      installBtn.onclick = () => openInstall(u, panel, installBtn);
+      const installed = el('span', { className: 'installed', textContent: u.phoneName
+        ? 'Installed on ' + u.phoneName + ' \u00b7 ' + new Date(u.installedAt).toLocaleDateString()
+        : 'Not installed on a phone yet' });
+
+      list.append(el('div', { className: 'card' },
+        el('div', { className: 'row' }, el('div', { className: 'name', textContent: u.name }), toggle),
+        el('div', { className: 'installrow' }, installBtn, installed),
+        panel,
+        el('div', { className: 'tokenline' }, code, copy, reset, remove)));
+      if (activeJob && activeJob.userId === u.id) showProgress(panel, installBtn);
+    }
+  }
+
+  // ---- Install on iPhone ----
+  let activeJob = null;
+
+  async function openInstall(u, panel, btn) {
+    panel.hidden = false;
+    btn.disabled = true;
+    panel.replaceChildren(el('p', {}, el('span', { className: 'spin' }), 'Looking for iPhones connected to this Mac\u2026'));
+    let devices;
+    try { devices = (await api(null, '/api/install/devices')).devices || []; }
+    catch (e) { return panelError(panel, btn, 'Couldn\u2019t list iPhones: ' + e.message); }
+
+    const tips = el('p', { textContent: 'Plug ' + u.name + '\u2019s phone into this Mac with a cable, unlock it and tap Trust. ' +
+      'The first time, it also needs Developer Mode on (Settings \u203a Privacy & Security) and the Tailscale app connected.' });
+    if (!devices.length) {
+      const again = el('button', { type: 'button', textContent: 'Look again' });
+      again.onclick = () => openInstall(u, panel, btn);
+      const cancel = el('button', { type: 'button', textContent: 'Cancel' });
+      cancel.onclick = () => { panel.hidden = true; btn.disabled = false; };
+      return panel.replaceChildren(el('p', { textContent: 'No iPhone found.' }), tips, el('div', { className: 'actions' }, again, cancel));
+    }
+    const group = 'phone-' + u.id;
+    const preselect = devices.find(d => d.udid === u.phoneUDID) || devices.find(d => d.pluggedIn) || null;
+    const rows = devices.map(d => {
+      const radio = el('input', { type: 'radio', name: group, value: d.udid, checked: d === preselect });
+      return el('label', { className: 'phone' }, radio, d.name, el('small', { textContent: d.model }),
+        d.pluggedIn ? el('span', { className: 'tag', textContent: 'plugged in' }) : '',
+        d.udid === u.phoneUDID ? el('span', { className: 'tag', textContent: u.name + '\u2019s' }) : '');
+    });
+    const go = el('button', { type: 'button', className: 'primary', textContent: 'Install' });
+    const cancel = el('button', { type: 'button', textContent: 'Cancel' });
+    cancel.onclick = () => { panel.hidden = true; btn.disabled = false; };
+    go.onclick = async () => {
+      const picked = panel.querySelector('input[name="' + group + '"]:checked');
+      if (!picked) return say('Pick ' + u.name + '\u2019s phone first.');
+      const dev = devices.find(d => d.udid === picked.value);
+      if (!confirm('Install Stockroom on \u201c' + dev.name + '\u201d for ' + u.name + '?\n\n' +
+                   'That phone will sync as ' + u.name + ' from now on. Don\u2019t pick your own phone.')) return;
+      try {
+        activeJob = await api({ id: u.id, udid: dev.udid, deviceName: dev.name }, '/api/install');
+        showProgress(panel, btn);
+      } catch (e) { say('Couldn\u2019t start: ' + e.message); }
+    };
+    panel.replaceChildren(el('p', { textContent: 'Which phone is ' + u.name + '\u2019s?' }), ...rows, tips,
+      el('div', { className: 'actions' }, go, cancel));
+  }
+
+  function panelError(panel, btn, text) {
+    const close = el('button', { type: 'button', textContent: 'Close' });
+    close.onclick = () => { panel.hidden = true; btn.disabled = false; };
+    panel.replaceChildren(el('p', { className: 'progress bad', textContent: text }), el('div', { className: 'actions' }, close));
+  }
+
+  async function showProgress(panel, btn) {
+    panel.hidden = false;
+    btn.disabled = true;
+    const line = el('div', { className: 'progress' });
+    const log = el('pre');
+    panel.replaceChildren(line);
+    for (;;) {
+      let job;
+      try { job = await api(null, '/api/install/status'); }
+      catch (e) { line.textContent = 'Lost track of the install: ' + e.message; return; }
+      activeJob = job;
+      const last = (job.log || []).filter(Boolean).slice(-1)[0] || 'Starting\u2026';
+      if (job.state === 'running') {
+        line.replaceChildren(el('span', { className: 'spin' }), last.replace(/^[\s\u2713\u2717]+/, ''));
+        await new Promise(r => setTimeout(r, 1500));
+        continue;
+      }
+      activeJob = null;
+      const close = el('button', { type: 'button', textContent: 'Close' });
+      close.onclick = () => { panel.hidden = true; btn.disabled = false; load(); };
+      if (job.state === 'done') {
+        line.className = 'progress ok';
+        line.textContent = '\u2713 Installed on ' + job.device + '. Open Stockroom on the phone \u2014 it connects by itself.';
+        panel.replaceChildren(line, el('div', { className: 'actions' }, close));
+      } else {
+        line.className = 'progress bad';
+        line.textContent = '\u2717 The install didn\u2019t finish. Details:';
+        log.textContent = (job.log || []).slice(-30).join('\n');
+        panel.replaceChildren(line, log, el('div', { className: 'actions' }, close));
+      }
+      return;
+    }
+  }
+
+  async function load() {
+    try {
+      const job = await api(null, '/api/install/status').catch(() => null);
+      activeJob = job && job.state === 'running' ? job : null;
+      render((await api()).users || []);
+    }
+    catch (e) { say('Couldn’t load users: ' + e.message); }
+  }
+
+  document.getElementById('add').addEventListener('submit', async ev => {
+    ev.preventDefault();
+    const input = document.getElementById('newname');
+    try {
+      const { user } = await api({ action: 'add', name: input.value, canDelete: false });
+      input.value = '';
+      say(user.name + ' added (deleting off). Copy their token into their phone.');
+      load();
+    } catch (e) { say('Couldn’t add: ' + e.message); }
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>
