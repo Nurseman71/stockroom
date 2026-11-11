@@ -2174,6 +2174,12 @@
     syncStatus.className = 'sync-status';
   }
 
+  // Order-independent fingerprint of the box list, so a sync that returns
+  // the same boxes in a different order still counts as "no change".
+  function itemsSignature(list){
+    return JSON.stringify(list.map(it => JSON.stringify(it, Object.keys(it).sort())).sort());
+  }
+
   async function syncNow(){
     const url = getServerUrl();
     if(!url){
@@ -2192,6 +2198,7 @@
         return;
       }
       const serverData = await getRes.json();
+      const before = itemsSignature(items);
       const merged = mergeItems(items, serverData.items || []);
       const postRes = await fetch(url + '/api/data?' + tokenParam, {
         method: 'POST',
@@ -2205,8 +2212,13 @@
       }
       const finalData = await postRes.json();
       items = finalData.items || merged;
-      saveLocal();
-      render();
+      // Only redraw when the sync actually changed something. render()
+      // rebuilds the whole grid -- every card and photo -- so redrawing
+      // after every 30s auto-sync made the page flicker (Nov 10 2026).
+      if(itemsSignature(items) !== before){
+        saveLocal();
+        render();
+      }
       syncStatus.textContent = 'synced ' + new Date().toLocaleTimeString();
       syncStatus.className = 'sync-status ok';
       await uploadQueuedPhotos(url, tokenParam);
