@@ -179,3 +179,32 @@ struct DeleteSwitchTests {
         #expect(String(decoding: body, as: UTF8.self) == #"{"items":[]}"#)
     }
 }
+
+@MainActor struct PrintedTagTests {
+
+    private func box(_ id: String, _ tags: [String], deleted: Bool = false) -> Box {
+        Box(id: id, box: id, contents: "", location: "", tags: tags,
+            updatedAt: "2026-01-01T00:00:00.000Z", deleted: deleted)
+    }
+
+    @Test func printedMatchesAnyCapitalisation() {
+        #expect(BoxStore.isPrinted(box("a", ["Printed"])))
+        #expect(BoxStore.isPrinted(box("b", ["red", " printed "])))
+        #expect(!BoxStore.isPrinted(box("c", ["Reprinted", "Blue"])))
+    }
+
+    @Test func unprintedSkipsDeletedAndPrintedBoxes() {
+        let store = BoxStore(previewBoxes: [
+            box("1", ["Printed"]), box("2", ["Blue"]), box("3", []), box("4", [], deleted: true)])
+        #expect(store.unprintedBoxes.map(\.id) == ["2", "3"])
+    }
+
+    @Test func markPrintedReusesTheShelfsSpelling() {
+        let store = BoxStore(previewBoxes: [box("1", ["printed"]), box("2", ["Blue"]), box("3", [])])
+        store.markPrinted(ids: ["1", "2", "3"])
+        #expect(store.box(id: "1")?.tags == ["printed"])           // untouched
+        #expect(store.box(id: "2")?.tags == ["Blue", "printed"])
+        #expect(store.box(id: "3")?.tags == ["printed"])
+        #expect(store.unprintedBoxes.isEmpty)
+    }
+}

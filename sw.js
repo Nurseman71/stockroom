@@ -28,7 +28,7 @@
  *   like unstyled fallback text.
  */
 
-const VERSION = 'stockroom-v1';
+const VERSION = 'stockroom-v2';   // v2 (Nov 10 2026): new Duo Fold icon -- icons are served cache-first
 const SHELL   = VERSION + '-shell';
 const RUNTIME = VERSION + '-runtime';
 

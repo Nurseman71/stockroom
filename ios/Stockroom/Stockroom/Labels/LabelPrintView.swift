@@ -15,8 +15,11 @@ struct LabelPrintView: View {
     @Environment(\.dismiss) private var dismiss
 
     let boxes: [Box]
+    /// Set for "Unprinted": after a print is sent, ask to tag these Printed.
+    var offerMarkPrinted = false
 
     @State private var pdf: Data?
+    @State private var askMarkPrinted = false
     @State private var fileURL: URL?
 
     private var title: String {
@@ -76,6 +79,17 @@ struct LabelPrintView: View {
                 }
             }
             .task { build() }
+            .alert(boxes.count == 1 ? "Did the label print?" : "Did all \(boxes.count) labels print?",
+                   isPresented: $askMarkPrinted) {
+                Button("Mark as Printed") {
+                    store.markPrinted(ids: boxes.map(\.id))
+                    dismiss()
+                }
+                Button("Not Now", role: .cancel) {}
+            } message: {
+                Text(boxes.count == 1 ? "Tag this box Printed so it's left out next time."
+                                      : "Tag these \(boxes.count) boxes Printed so they're left out next time.")
+            }
         }
     }
 
@@ -96,7 +110,11 @@ struct LabelPrintView: View {
         let controller = UIPrintInteractionController.shared
         controller.printInfo = info
         controller.printingItem = pdf
-        controller.present(animated: true)
+        // `completed` is false when the print dialog is cancelled, so a
+        // cancelled print never offers to mark anything.
+        controller.present(animated: true) { _, completed, _ in
+            if completed && offerMarkPrinted { askMarkPrinted = true }
+        }
     }
 }
 

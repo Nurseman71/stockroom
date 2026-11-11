@@ -168,6 +168,31 @@ final class BoxStore {
         boxes.first { $0.id == id && !$0.deleted }
     }
 
+    // MARK: Printed tag
+
+    /// A box counts as having a printed label once it carries this tag, in
+    /// any capitalisation — same rule as the web app's "Print unprinted".
+    nonisolated static let printedTag = "Printed"
+
+    nonisolated static func isPrinted(_ box: Box) -> Bool {
+        box.tags.contains { normalizedKey($0) == normalizedKey(printedTag) }
+    }
+
+    /// Every live box still waiting for a label, regardless of search/filters.
+    var unprintedBoxes: [Box] { visibleBoxes.filter { !Self.isPrinted($0) } }
+
+    /// Tags the given boxes Printed, reusing the shelf's existing spelling so
+    /// the tag list doesn't split. Skips boxes deleted or tagged since.
+    func markPrinted(ids: [String]) {
+        let key = Self.normalizedKey(Self.printedTag)
+        let spelling = visibleBoxes.lazy.flatMap(\.tags).first { Self.normalizedKey($0) == key } ?? Self.printedTag
+        for id in ids {
+            guard var b = box(id: id), !Self.isPrinted(b) else { continue }
+            b.tags.append(spelling)
+            save(b)
+        }
+    }
+
     /// Applies the editor's photo list to `box`: writes photos taken in
     /// this edit to disk and queues their upload, and forgets photos taken
     /// off the box (the server moves those to photos/removed/ and keeps them

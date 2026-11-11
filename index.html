@@ -727,7 +727,8 @@
   <div class="tag-chips" id="tagChips"></div>
   <span class="count-pill" id="countPill">0 boxes</span>
   <button id="selectModeBtn" title="Pick individual boxes to print">Select</button>
-  <button id="printSheetBtn" title="Print a label for every box currently shown">Print labels</button>
+  <button id="printSheetBtn" title="Print a label for every ticked box" style="display:none;">Print selected</button>
+  <button id="printUnprintedBtn" title="Print a label for every box not tagged Printed" style="display:none;">Print unprinted</button>
 </div>
 
 <div class="select-bar" id="selectBar">
@@ -735,6 +736,13 @@
   <span class="spacer"></span>
   <button id="selectAllShownBtn">Select all shown</button>
   <button id="clearSelectionBtn">Clear</button>
+</div>
+
+<div class="select-bar" id="markPrintedBar">
+  <span id="markPrintedText"></span>
+  <span class="spacer"></span>
+  <button id="markPrintedBtn" class="btn-primary">Mark as Printed</button>
+  <button id="markPrintedDismiss">Not now</button>
 </div>
 
 <main>
@@ -1129,17 +1137,15 @@
     const filtered = items.filter(it => matchesFilters(it, q));
 
     countPill.textContent = `${filtered.length} box${filtered.length===1?'':'es'}`;
-    // Naming the count makes the scope self-evident: the filters you can
-    // see ARE the selection.
     const sheetBtn = document.getElementById('printSheetBtn');
+    refreshUnprintedBtn();
     if(selectMode){
       refreshSelectionUi();
-    } else {
-      sheetBtn.textContent = filtered.length === 0 ? 'Print labels'
-        : filtered.length === 1 ? 'Print label'
-        : `Print ${filtered.length} labels`;
-      sheetBtn.disabled = filtered.length === 0;
     }
+    // Printing "everything shown" was removed on request (Nov 10 2026):
+    // labels are printed either by ticking boxes in Select mode or with
+    // "Print N unprinted". The sheet button exists only in Select mode.
+    sheetBtn.style.display = selectMode ? '' : 'none';
     grid.innerHTML = '';
 
     if(filtered.length === 0){
@@ -1883,7 +1889,7 @@
       document.documentElement.classList.add('labelview');
       document.body.classList.add('labelview');
       window.scrollTo(0, 0);
-      return;
+      return true;
     }
     document.body.classList.add('printing');
     try{
@@ -1891,9 +1897,10 @@
     }catch(err){
       document.body.classList.remove('printing');
       alert('Printing failed: ' + err.message);
-      return;
+      return false;
     }
     clearPrintingSoon();
+    return true;
   }
 
   function labelQrHtml(item){
@@ -1937,7 +1944,7 @@
   // silently drop boxes already ticked, which is the whole reason the
   // selection is held as ids.
   function boxesToPrint(){
-    if(!selectMode) return boxesCurrentlyShown();
+    if(!selectMode) return [];
     return sortShelfOrder(items.filter(it => !it.deleted && selectedIds.has(it.id)));
   }
 
@@ -1989,6 +1996,73 @@
     renderSheet(list);
     printLabelArea();
   });
+
+  // ---------- Print unprinted ----------
+  // A box counts as printed once it carries a "Printed" tag, in any
+  // capitalisation. Deliberately ignores search and tag filters: the
+  // point is "every label I still owe", wherever it lives.
+  const PRINTED_TAG = 'Printed';
+  const isPrinted = it => (it.tags||[]).some(t => t.toLowerCase() === PRINTED_TAG.toLowerCase());
+  function unprintedBoxes(){
+    return sortShelfOrder(items.filter(it => !it.deleted && !isPrinted(it)));
+  }
+
+  const printUnprintedBtn = document.getElementById('printUnprintedBtn');
+  const markPrintedBar = document.getElementById('markPrintedBar');
+  // Ids, not boxes: a sync can replace `items` between printing and
+  // answering the prompt.
+  let pendingMarkIds = [];
+
+  function refreshUnprintedBtn(){
+    const n = unprintedBoxes().length;
+    // Hidden in select mode, where the print button means "the ticked ones".
+    printUnprintedBtn.style.display = (n === 0 || selectMode) ? 'none' : '';
+    printUnprintedBtn.textContent = n === 1 ? 'Print 1 unprinted' : `Print ${n} unprinted`;
+  }
+
+  function hideMarkPrinted(){
+    pendingMarkIds = [];
+    markPrintedBar.classList.remove('show');
+  }
+
+  printUnprintedBtn.addEventListener('click', ()=>{
+    const list = unprintedBoxes();
+    if(!list.length) return;
+    hideMarkPrinted();
+    renderSheet(list);
+    if(!printLabelArea()) return;
+    // Desktop: window.print() blocks, so this appears once the dialog
+    // closes. iOS: the label view hides it until Done is tapped. Asking
+    // rather than tagging outright means a cancelled or jammed print
+    // marks nothing.
+    pendingMarkIds = list.map(it => it.id);
+    const n = pendingMarkIds.length;
+    document.getElementById('markPrintedText').textContent =
+      n === 1 ? 'Did the label print? Mark this box as Printed?'
+              : `Did all ${n} labels print? Mark these ${n} boxes as Printed?`;
+    markPrintedBar.classList.add('show');
+  });
+
+  document.getElementById('markPrintedBtn').addEventListener('click', ()=>{
+    // Reuse whatever spelling the shelf already has so tag chips don't split.
+    let spelling = PRINTED_TAG;
+    for(const it of items){
+      const t = (it.tags||[]).find(t => t.toLowerCase() === PRINTED_TAG.toLowerCase());
+      if(t){ spelling = t; break; }
+    }
+    const now = new Date().toISOString();
+    for(const id of pendingMarkIds){
+      const idx = items.findIndex(i => i.id === id);
+      if(idx === -1 || items[idx].deleted || isPrinted(items[idx])) continue;
+      items[idx] = { ...items[idx], tags: [...(items[idx].tags||[]), spelling], updatedAt: now };
+    }
+    hideMarkPrinted();
+    saveLocal();
+    render();
+    syncSoon();
+  });
+
+  document.getElementById('markPrintedDismiss').addEventListener('click', hideMarkPrinted);
 
   printLabelBtn.addEventListener('click', ()=>{
     if(!editingId) return;

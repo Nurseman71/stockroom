@@ -118,7 +118,7 @@ struct BoxListView: View {
           }
         }
         .sheet(item: $printJob) { job in
-            LabelPrintView(boxes: job.boxes)
+            LabelPrintView(boxes: job.boxes, offerMarkPrinted: job.offerMarkPrinted)
         }
         .fullScreenCover(isPresented: $scanning) {
             LabelScannerSheet { id in
@@ -187,10 +187,13 @@ struct BoxListView: View {
 
     private var printMenu: some View {
         Menu {
-            Button("All Shown (\(filtered.count))", systemImage: "square.stack") {
-                startPrinting(filtered)
+            // "All Shown" was removed on request (Nov 10 2026): labels are
+            // printed for unprinted boxes or for hand-picked ones only.
+            // Ignores search and filters: every label still owed.
+            Button("Unprinted (\(store.unprintedBoxes.count))", systemImage: "tag.slash") {
+                startPrinting(store.unprintedBoxes, offerMarkPrinted: true)
             }
-            .disabled(filtered.isEmpty)
+            .disabled(store.unprintedBoxes.isEmpty)
             Button("Choose Boxes…", systemImage: "checkmark.circle") {
                 picked.removeAll()
                 choosing = true
@@ -221,9 +224,9 @@ struct BoxListView: View {
         }
     }
 
-    private func startPrinting(_ boxes: [Box]) {
+    private func startPrinting(_ boxes: [Box], offerMarkPrinted: Bool = false) {
         guard !boxes.isEmpty else { return }
-        printJob = PrintJob(boxes: boxes)
+        printJob = PrintJob(boxes: boxes, offerMarkPrinted: offerMarkPrinted)
         choosing = false
         picked.removeAll()
     }
@@ -346,6 +349,8 @@ struct BoxListView: View {
 struct PrintJob: Identifiable {
     let id = UUID()
     let boxes: [Box]
+    /// Ask to tag the boxes Printed once the print job is sent.
+    var offerMarkPrinted = false
 }
 
 // MARK: - Row
